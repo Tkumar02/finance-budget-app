@@ -280,9 +280,21 @@ h2 {
   align-items: center;
 }
 
-.income-table .table-row,
-.savings-table .table-row {
+.income-table .table-row {
   grid-template-columns: minmax(160px, 1.3fr) repeat(4, minmax(100px, 1fr));
+}
+
+.savings-table .table-row {
+  grid-template-columns: 40px minmax(160px, 1.3fr) repeat(4, minmax(100px, 1fr));
+}
+
+.table-row.deselected {
+  opacity: 0.5;
+}
+
+.projection-row.deselected {
+  opacity: 0.4;
+  filter: grayscale(1);
 }
 
 .table-row.header {

@@ -97,7 +97,7 @@ function App() {
     [paye, selfEmployment, taxSettings],
   );
   const savingsForBudget = useMemo(
-    () => savings.filter((bucket) => bucket.type !== "workplace-pension"),
+    () => savings.filter((bucket) => bucket.type !== "workplace-pension" && !bucket.isHidden),
     [savings],
   );
 const projectionBuckets = useMemo(() => {
@@ -127,7 +127,7 @@ const projectionBuckets = useMemo(() => {
     [tax.monthlyNet, budgetLines, annualBills, savingsForBudget],
   );
 const projectedSavings = useMemo(
-  () => projectSavings(projectionBuckets.filter(b => !b.isHidden), projectionYears),
+  () => projectSavings(projectionBuckets, projectionYears),
   [projectionBuckets, projectionYears],
 );
   const mortgageSummary = useMemo(() => calculateMortgage(mortgage), [mortgage]);
@@ -135,7 +135,10 @@ const projectedSavings = useMemo(
     () => requiredGrossForNet(Math.max(0, budget.monthlyOut * 12), taxSettings.taxCode, taxSettings.region),
     [budget.monthlyOut, taxSettings],
   );
-  const projectedTotal = projectedSavings.reduce((sum, bucket) => sum + bucket.projected, 0);
+  const projectedTotal = projectedSavings.reduce((sum, bucket) => {
+    return bucket.isHidden ? sum : sum + bucket.projected;
+  }, 0);
+  const allProjectedTotal = projectedSavings.reduce((sum, bucket) => sum + bucket.projected, 0);
 
   const sections = [
     { id: "overview", title: "Overview", value: monthlyMoney.format(budget.monthlySurplus), detail: "monthly surplus" },
@@ -221,6 +224,7 @@ const projectedSavings = useMemo(
           setProjectionYears={setProjectionYears}
           projectedSavings={projectedSavings}
           projectedTotal={projectedTotal}
+          allProjectedTotal={allProjectedTotal}
           employmentPensionMonthly={tax.employmentPensionTotal / 12}
           employerPensionMonthly={tax.employerPensionTotal / 12}
         />
@@ -524,6 +528,7 @@ function SavingsSection({
   setProjectionYears,
   projectedSavings,
   projectedTotal,
+  allProjectedTotal,
   employmentPensionMonthly,
   employerPensionMonthly,
 }: {
@@ -533,6 +538,7 @@ function SavingsSection({
   setProjectionYears: React.Dispatch<React.SetStateAction<number>>;
   projectedSavings: (SavingsBucket & { projected: number; contributed: number })[];
   projectedTotal: number;
+  allProjectedTotal: number;
   employmentPensionMonthly: number;
   employerPensionMonthly: number;
 }) {
@@ -556,13 +562,12 @@ function SavingsSection({
             <span>Growth %</span>
           </div>
           {projectedSavings.map((bucket) => (
-            <div className="table-row" key={bucket.id} style={{ opacity: bucket.isHidden ? 0.5 : 1 }}>
-              {/* The Checkbox */}
-              {/* <input 
-                type="checkbox" 
-                checked={!bucket.isHidden} 
-                onChange={() => setSavings(updateItem(savings, bucket.id, { isHidden: !bucket.isHidden }))} 
-              /> */}
+            <div className={`table-row ${bucket.isHidden ? "deselected" : ""}`} key={bucket.id}>
+              <input
+                type="checkbox"
+                checked={!bucket.isHidden}
+                onChange={() => setSavings(updateItem(savings, bucket.id, { isHidden: !bucket.isHidden }))}
+              />
               <TextInput value={bucket.label} onChange={(label) => setSavings(updateItem(savings, bucket.id, { label }))} />
               <select value={bucket.type} onChange={(event) => setSavings(updateItem(savings, bucket.id, { type: event.target.value as SavingsBucket["type"] }))}>
                 <option value="cash">Cash</option>
@@ -572,11 +577,10 @@ function SavingsSection({
                 <option value="workplace-pension">Workplace pension</option>
               </select>
               <NumberInput value={bucket.balance} onChange={(balance) => setSavings(updateItem(savings, bucket.id, { balance }))} />
-              <NumberInput 
-                value={parseFloat(bucket.monthly.toFixed(2))} 
-                onChange={(monthly) => setSavings(updateItem(savings, bucket.id, { monthly }))} 
-              />              
-              <NumberInput value={bucket.annualRate} onChange={(annualRate) => setSavings(updateItem(savings, bucket.id, { annualRate }))} suffix="%" />
+            <NumberInput 
+              value={parseFloat(bucket.monthly.toFixed(2))} 
+              onChange={(monthly) => setSavings(updateItem(savings, bucket.id, { monthly }))} 
+            />              <NumberInput value={bucket.annualRate} onChange={(annualRate) => setSavings(updateItem(savings, bucket.id, { annualRate }))} suffix="%" />
             </div>
           ))}
         </div>
@@ -599,13 +603,13 @@ function SavingsSection({
       <section className="panel span-12">
         <div className="projection-bars">
           {projectedSavings.map((bucket) => (
-            <div className="projection-row" key={bucket.id}>
+            <div className={`projection-row ${bucket.isHidden ? "deselected" : ""}`} key={bucket.id}>
               <div>
                 <strong>{bucket.label}</strong>
                 <span>{bucket.type.toUpperCase()} - {monthlyMoney.format(bucket.monthly)}/mo</span>
               </div>
               <div className="bar-track">
-                <div style={{ width: `${Math.max(3, (bucket.projected / Math.max(1, projectedTotal)) * 100)}%` }} />
+                <div style={{ width: `${Math.max(3, (bucket.projected / Math.max(1, allProjectedTotal)) * 100)}%` }} />
               </div>
               <b>{money.format(bucket.projected)}</b>
             </div>
