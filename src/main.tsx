@@ -23,15 +23,16 @@ type SectionId = "overview" | "income" | "tax" | "budget" | "savings" | "mortgag
 const uid = () => crypto.randomUUID();
 
 const initialPaye: PayeIncome[] = [
-  { id: uid(), label: "Main PAYE job", gross: 80000, pensionRate: 9, employerPensionContribution: 0, taxPaid: 0 },
-  { id: uid(), label: "Second PAYE job", gross: 9000, pensionRate: 5.2, employerPensionContribution: 0, taxPaid: 0 },
+  { id: uid(), label: "Main PAYE job", gross: 89592, pensionRate: 9, employerPensionContribution: 12, taxPaid: 0 },
+  { id: uid(), label: "Main PAYE cash benefits", gross: 5466, pensionRate: 0, employerPensionContribution: 0, taxPaid: 0 },
+  { id: uid(), label: "Second PAYE job", gross: 11949, pensionRate: 5.2, employerPensionContribution: 0, taxPaid: 0 },
 ];
 
 const initialSelfEmployment: SelfEmployment[] = [
   {
     id: uid(),
     label: "Rental / sole trader",
-    gross: 25000,
+    gross: 21000,
     expenses: [
       { id: uid(), label: "Insurance", amount: 500 },
       { id: uid(), label: "Accountant", amount: 800 },
@@ -40,12 +41,12 @@ const initialSelfEmployment: SelfEmployment[] = [
   },
   {
     id: uid(),
-    label: "Delivery / company work",
-    gross: 13000,
+    label: "Additional self employed income",
+    gross: 0,
     expenses: [
-      { id: uid(), label: "Van insurance", amount: 800 },
-      { id: uid(), label: "Fuel", amount: 600 },
-      { id: uid(), label: "Maintenance", amount: 1000 },
+      { id: uid(), label: "Van insurance", amount: 0 },
+      { id: uid(), label: "Fuel", amount: 0 },
+      { id: uid(), label: "Maintenance", amount:0 },
     ],
   },
 ];
@@ -62,11 +63,11 @@ const initialAnnualBills: ExpenseLine[] = [
 ];
 
 const initialSavings: SavingsBucket[] = [
-  { id: uid(), label: "Cash reserve", balance: 6000, monthly: 350, annualRate: 3, type: "cash" },
-  { id: uid(), label: "Stocks ISA", balance: 17500, monthly: 667, annualRate: 5, type: "isa" },
-  { id: uid(), label: "Lifetime ISA", balance: 5000, monthly: 333, annualRate: 5, type: "lisa" },
-  { id: uid(), label: "Pension / SIPP", balance: 3000, monthly: 709, annualRate: 5, type: "pension" },
-  { id: uid(), label: "Workplace pension", balance: 31000, monthly: 0, annualRate: 5, type: "workplace-pension" },
+  { id: uid(), label: "Cash reserve", balance: 6000, monthly: 350, annualRate: 3, type: "cash", isHidden: false },
+  { id: uid(), label: "Stocks ISA", balance: 30163, monthly: 1000, annualRate: 5, type: "isa", isHidden: false },
+  { id: uid(), label: "Lifetime ISA", balance: 5000, monthly: 333.33, annualRate: 5, type: "lisa", isHidden: false },
+  { id: uid(), label: "Pension / SIPP", balance: 3000, monthly: 709, annualRate: 5, type: "pension", isHidden: false },
+  { id: uid(), label: "Workplace pension", balance: 24000, monthly: 0, annualRate: 5, type: "workplace-pension", isHidden: false },
 ];
 
 function App() {
@@ -83,10 +84,10 @@ function App() {
   const [savings, setSavings] = useState(initialSavings);
   const [projectionYears, setProjectionYears] = useState(10);
   const [mortgage, setMortgage] = useState<MortgageInputs>({
-    amount: 300000,
-    annualRate: 4,
-    years: 30,
-    monthlyOverpayment: 1000,
+    amount: 282999,
+    annualRate: 3.78,
+    years: 26,
+    monthlyOverpayment: 1500,
     oneOffMonth: 0,
     oneOffAmount: 0,
   });
@@ -99,23 +100,36 @@ function App() {
     () => savings.filter((bucket) => bucket.type !== "workplace-pension"),
     [savings],
   );
-  const projectionBuckets = useMemo(
-    () =>
-      savings.map((bucket) =>
-        bucket.type === "workplace-pension"
-          ? { ...bucket, monthly: bucket.monthly + (tax.employmentPensionTotal + tax.employerPensionTotal) / 12 }
-          : bucket,
-      ),
-    [savings, tax.employmentPensionTotal, tax.employerPensionTotal],
-  );
+const projectionBuckets = useMemo(() => {
+    // 1. Calculate the TOTAL employer contribution from ALL jobs
+    const totalEmployerMonthly = paye.reduce((sum, job) => {
+      const monthly = (job.gross * (job.employerPensionContribution || 0)) / 1200;
+      return sum + monthly;
+    }, 0);
+
+    // 2. Calculate the TOTAL employee contribution from ALL jobs
+    // (This assumes tax.employmentPensionTotal is already the sum of all jobs)
+    const totalEmployeeMonthly = tax.employmentPensionTotal / 12;
+
+    return savings.map((bucket) => {
+      if (bucket.type === "workplace-pension") {
+        return { 
+          ...bucket, 
+          // We add the base 'monthly' (usually 0) + both calculated totals
+          monthly: bucket.monthly + totalEmployeeMonthly + totalEmployerMonthly
+        };
+      }
+      return bucket;
+    });
+  }, [savings, tax.employmentPensionTotal, paye]);
   const budget = useMemo(
     () => budgetSummary(tax.monthlyNet, budgetLines, annualBills, savingsForBudget),
     [tax.monthlyNet, budgetLines, annualBills, savingsForBudget],
   );
-  const projectedSavings = useMemo(
-    () => projectSavings(projectionBuckets, projectionYears),
-    [projectionBuckets, projectionYears],
-  );
+const projectedSavings = useMemo(
+  () => projectSavings(projectionBuckets.filter(b => !b.isHidden), projectionYears),
+  [projectionBuckets, projectionYears],
+);
   const mortgageSummary = useMemo(() => calculateMortgage(mortgage), [mortgage]);
   const targetGross = useMemo(
     () => requiredGrossForNet(Math.max(0, budget.monthlyOut * 12), taxSettings.taxCode, taxSettings.region),
@@ -534,14 +548,21 @@ function SavingsSection({
         </div>
         <div className="table savings-table">
           <div className="table-row header">
+            <span>Show</span>
             <span>Bucket</span>
             <span>Type</span>
             <span>Current capital</span>
             <span>Monthly saving</span>
             <span>Growth %</span>
           </div>
-          {savings.map((bucket) => (
-            <div className="table-row" key={bucket.id}>
+          {projectedSavings.map((bucket) => (
+            <div className="table-row" key={bucket.id} style={{ opacity: bucket.isHidden ? 0.5 : 1 }}>
+              {/* The Checkbox */}
+              {/* <input 
+                type="checkbox" 
+                checked={!bucket.isHidden} 
+                onChange={() => setSavings(updateItem(savings, bucket.id, { isHidden: !bucket.isHidden }))} 
+              /> */}
               <TextInput value={bucket.label} onChange={(label) => setSavings(updateItem(savings, bucket.id, { label }))} />
               <select value={bucket.type} onChange={(event) => setSavings(updateItem(savings, bucket.id, { type: event.target.value as SavingsBucket["type"] }))}>
                 <option value="cash">Cash</option>
@@ -551,7 +572,10 @@ function SavingsSection({
                 <option value="workplace-pension">Workplace pension</option>
               </select>
               <NumberInput value={bucket.balance} onChange={(balance) => setSavings(updateItem(savings, bucket.id, { balance }))} />
-              <NumberInput value={bucket.monthly} onChange={(monthly) => setSavings(updateItem(savings, bucket.id, { monthly }))} />
+              <NumberInput 
+                value={parseFloat(bucket.monthly.toFixed(2))} 
+                onChange={(monthly) => setSavings(updateItem(savings, bucket.id, { monthly }))} 
+              />              
               <NumberInput value={bucket.annualRate} onChange={(annualRate) => setSavings(updateItem(savings, bucket.id, { annualRate }))} suffix="%" />
             </div>
           ))}

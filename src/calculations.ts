@@ -33,6 +33,7 @@ export type SavingsBucket = {
   monthly: number;
   annualRate: number;
   type: "cash" | "isa" | "pension" | "lisa" | "workplace-pension";
+  isHidden?:boolean;
 };
 
 export type MortgageInputs = {
