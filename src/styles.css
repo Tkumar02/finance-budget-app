@@ -74,6 +74,76 @@ label {
   padding-bottom: 22px;
 }
 
+.plan-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 12px;
+}
+
+.plan-selector {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.plan-selector select {
+  width: 200px;
+}
+
+.auth-container {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  background: #f4f1ea;
+}
+
+.auth-card {
+  width: 100%;
+  max-width: 400px;
+  padding: 32px;
+  border: 1px solid #ded8cc;
+  border-radius: 12px;
+  background: #fffaf1;
+  box-shadow: 0 24px 48px rgb(46 39 25 / 10%);
+}
+
+.auth-card h1 {
+  margin-bottom: 24px;
+  text-align: center;
+  font-size: 1.8rem;
+}
+
+.auth-card form {
+  display: grid;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.auth-card button {
+  width: 100%;
+}
+
+.error-notice {
+  color: #a7332f;
+  font-size: 0.85rem;
+  font-weight: 600;
+  padding: 8px;
+  background: #fff1f0;
+  border: 1px solid #f5d3d1;
+  border-radius: 6px;
+}
+
+.loading-screen {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  font-weight: 800;
+  color: #24594f;
+}
+
 .eyebrow {
   margin: 0 0 6px;
   color: #60756f;

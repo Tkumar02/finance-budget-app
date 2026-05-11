@@ -1,5 +1,28 @@
-import React, { useMemo, useState } from "react";
+import React, { useMemo, useState, useEffect } from "react";
 import { createRoot } from "react-dom/client";
+import {
+  auth,
+  db,
+} from "./firebase";
+import {
+  onAuthStateChanged,
+  signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
+  signOut,
+  User,
+} from "firebase/auth";
+import {
+  collection,
+  query,
+  where,
+  getDocs,
+  addDoc,
+  updateDoc,
+  doc,
+  deleteDoc,
+  serverTimestamp,
+  Timestamp,
+} from "firebase/firestore";
 import {
   BudgetLine,
   ExpenseLine,
@@ -19,6 +42,67 @@ import {
 import "./styles.css";
 
 type SectionId = "overview" | "income" | "tax" | "budget" | "savings" | "mortgage";
+
+type Plan = {
+  id: string;
+  name: string;
+  userId: string;
+  updatedAt: Timestamp;
+  data: {
+    paye: PayeIncome[];
+    selfEmployment: SelfEmployment[];
+    taxSettings: TaxSettings;
+    budgetLines: BudgetLine[];
+    annualBills: ExpenseLine[];
+    savings: SavingsBucket[];
+    projectionYears: number;
+    mortgage: MortgageInputs;
+  };
+};
+
+function AuthScreen() {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [isSignup, setIsSignup] = useState(false);
+  const [error, setError] = useState("");
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError("");
+    try {
+      if (isSignup) {
+        await createUserWithEmailAndPassword(auth, email, password);
+      } else {
+        await signInWithEmailAndPassword(auth, email, password);
+      }
+    } catch (err: any) {
+      setError(err.message);
+    }
+  };
+
+  return (
+    <div className="auth-container">
+      <div className="auth-card">
+        <h1>{isSignup ? "Create Account" : "Sign In"}</h1>
+        <form onSubmit={handleSubmit}>
+          <label>
+            Email
+            <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
+          </label>
+          <label>
+            Password
+            <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required />
+          </label>
+          {error && <div className="error-notice">{error}</div>}
+          <button type="submit">{isSignup ? "Sign Up" : "Sign In"}</button>
+        </form>
+        <button className="secondary" onClick={() => setIsSignup(!isSignup)}>
+          {isSignup ? "Already have an account? Sign In" : "Need an account? Sign Up"}
+        </button>
+      </div>
+    </div>
+  );
+}
 
 const uid = () => crypto.randomUUID();
 
@@ -71,6 +155,11 @@ const initialSavings: SavingsBucket[] = [
 ];
 
 function App() {
+  const [user, setUser] = useState<User | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [plans, setPlans] = useState<Plan[]>([]);
+  const [currentPlanId, setCurrentPlanId] = useState<string | null>(null);
+
   const [activeSection, setActiveSection] = useState<SectionId>("overview");
   const [paye, setPaye] = useState(initialPaye);
   const [selfEmployment, setSelfEmployment] = useState(initialSelfEmployment);
@@ -91,6 +180,114 @@ function App() {
     oneOffMonth: 0,
     oneOffAmount: 0,
   });
+
+  useEffect(() => {
+    return onAuthStateChanged(auth, (u) => {
+      setUser(u);
+      setAuthLoading(false);
+    });
+  }, []);
+
+  const fetchPlans = async () => {
+    if (!user) return;
+    const q = query(collection(db, "plans"), where("userId", "==", user.uid));
+    const querySnapshot = await getDocs(q);
+    const fetchedPlans = querySnapshot.docs.map((doc) => ({
+      id: doc.id,
+      ...doc.data(),
+    })) as Plan[];
+    setPlans(fetchedPlans);
+  };
+
+  useEffect(() => {
+    if (user) {
+      fetchPlans();
+    } else {
+      setPlans([]);
+      setCurrentPlanId(null);
+    }
+  }, [user]);
+
+  const loadPlan = (plan: Plan) => {
+    setCurrentPlanId(plan.id);
+    const d = plan.data;
+    setPaye(d.paye);
+    setSelfEmployment(d.selfEmployment);
+    setTaxSettings(d.taxSettings);
+    setBudgetLines(d.budgetLines);
+    setAnnualBills(d.annualBills);
+    setSavings(d.savings);
+    setProjectionYears(d.projectionYears);
+    setMortgage(d.mortgage);
+  };
+
+  const handleSavePlan = async () => {
+    if (!user) return;
+    const planData = {
+      paye,
+      selfEmployment,
+      taxSettings,
+      budgetLines,
+      annualBills,
+      savings,
+      projectionYears,
+      mortgage,
+    };
+
+    if (currentPlanId) {
+      const planRef = doc(db, "plans", currentPlanId);
+      await updateDoc(planRef, {
+        data: planData,
+        updatedAt: serverTimestamp(),
+      });
+      alert("Plan saved successfully!");
+    } else {
+      const name = prompt("Enter a name for this plan:");
+      if (!name) return;
+      const docRef = await addDoc(collection(db, "plans"), {
+        userId: user.uid,
+        name,
+        data: planData,
+        updatedAt: serverTimestamp(),
+      });
+      setCurrentPlanId(docRef.id);
+      fetchPlans();
+      alert("New plan created and saved!");
+    }
+  };
+
+  const createNewPlan = () => {
+    setCurrentPlanId(null);
+    setPaye(initialPaye);
+    setSelfEmployment(initialSelfEmployment);
+    setTaxSettings({
+      taxCode: "1257L",
+      region: "england-wales-ni",
+      sippNetContribution: 8506,
+    });
+    setBudgetLines(initialBudget);
+    setAnnualBills(initialAnnualBills);
+    setSavings(initialSavings);
+    setProjectionYears(10);
+    setMortgage({
+      amount: 282999,
+      annualRate: 3.78,
+      years: 26,
+      monthlyOverpayment: 1500,
+      oneOffMonth: 0,
+      oneOffAmount: 0,
+    });
+  };
+
+  const handleDeletePlan = async () => {
+    if (!currentPlanId || !window.confirm("Are you sure you want to delete this plan?")) return;
+    const planRef = doc(db, "plans", currentPlanId);
+    await deleteDoc(planRef);
+    setCurrentPlanId(null);
+    fetchPlans();
+    alert("Plan deleted.");
+    createNewPlan();
+  };
 
   const tax = useMemo(
     () => calculateTaxSummary(paye, selfEmployment, taxSettings),
@@ -149,6 +346,9 @@ const projectedSavings = useMemo(
     { id: "mortgage", title: "Mortgage", value: `${mortgageSummary.payoffYears.toFixed(1)} yrs`, detail: "payoff estimate" },
   ] satisfies { id: SectionId; title: string; value: string; detail: string }[];
 
+  if (authLoading) return <div className="loading-screen">Loading application...</div>;
+  if (!user) return <AuthScreen />;
+
   return (
     <main className="app-shell">
       <section className="topbar">
@@ -156,7 +356,26 @@ const projectedSavings = useMemo(
           <p className="eyebrow">2026-2027 UK planning estimator</p>
           <h1>Income Plan</h1>
         </div>
-        <div className="notice">Estimator only. Check HMRC rules for filing decisions.</div>
+        <div className="plan-actions">
+          <div className="plan-selector">
+            <select
+              value={currentPlanId || ""}
+              onChange={(e) => {
+                const plan = plans.find((p) => p.id === e.target.value);
+                if (plan) loadPlan(plan);
+              }}
+            >
+              <option value="" disabled>Select a plan...</option>
+              {plans.map((p) => (
+                <option key={p.id} value={p.id}>{p.name}</option>
+              ))}
+            </select>
+            <button className="secondary" onClick={createNewPlan}>New Plan</button>
+            <button onClick={handleSavePlan}>Save Plan</button>
+            {currentPlanId && <button className="secondary" style={{ color: "#a7332f" }} onClick={handleDeletePlan}>Delete</button>}
+          </div>
+          <button className="secondary" onClick={() => signOut(auth)}>Sign Out ({user.email})</button>
+        </div>
       </section>
 
       <section className="summary-grid">
