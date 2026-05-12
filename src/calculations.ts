@@ -263,12 +263,39 @@ export function futureValue(balance: number, monthly: number, annualRate: number
   return value;
 }
 
-export function projectSavings(buckets: SavingsBucket[], years: number) {
-  return buckets.map((bucket) => ({
-    ...bucket,
-    projected: futureValue(bucket.balance, bucket.monthly, bucket.annualRate, years),
-    contributed: bucket.balance + bucket.monthly * years * 12,
-  }));
+// Replace your existing projectSavings in calculations.ts with this:
+export function projectSavings(buckets: SavingsBucket[], years: number, birthYear: number) {
+  const currentYear = new Date().getFullYear();
+  const startAge = currentYear - birthYear;
+
+  return buckets.map((bucket) => {
+    let balance = clampNumber(bucket.balance);
+    const annualRate = clampNumber(bucket.annualRate) / 100;
+    const monthlyRate = annualRate / 12;
+    const months = Math.max(0, Math.round(years * 12));
+
+    for (let i = 0; i < months; i++) {
+      const ageAtMonth = startAge + (i / 12);
+      let monthlyContribution = clampNumber(bucket.monthly);
+
+      // LISA Rules: +25% bonus until 50, then stop
+      if (bucket.type === 'lisa') {
+        if (ageAtMonth < 50) {
+          monthlyContribution = monthlyContribution * 1.25;
+        } else {
+          monthlyContribution = 0;
+        }
+      }
+
+      balance = balance * (1 + monthlyRate) + monthlyContribution;
+    }
+
+    return {
+      ...bucket,
+      projected: balance,
+      contributed: bucket.balance + (bucket.type === 'lisa' && startAge >= 50 ? 0 : bucket.monthly * years * 12),
+    };
+  });
 }
 
 export function monthlyMortgagePayment(amount: number, annualRate: number, years: number) {

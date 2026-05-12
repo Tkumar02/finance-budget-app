@@ -307,6 +307,13 @@ function App() {
     () => savings.filter((bucket) => bucket.type !== "workplace-pension" && !bucket.isHidden),
     [savings],
   );
+
+  const totalSippNet = useMemo(() => {
+  return savings
+    .filter(s => s.type === 'pension' || s.type === 'lisa') // Add types as needed
+    .reduce((sum, s) => sum + (s.monthly * 12), 0);
+}, [savings]);
+
 const projectionBuckets = useMemo(() => {
     // 1. Separate standard and NHS contributions
     const standardEmployerMonthly = paye.filter(j => (j.pensionType || 'standard') === 'standard').reduce((sum, job) => {
@@ -343,7 +350,7 @@ const projectionBuckets = useMemo(() => {
     [tax.monthlyNet, budgetLines, annualBills, savingsForBudget],
   );
 const projectedSavings = useMemo(
-  () => projectSavings(projectionBuckets, projectionYears),
+  () => projectSavings(projectionBuckets, projectionYears,birthYear),
   [projectionBuckets, projectionYears],
 );
   const mortgageSummary = useMemo(() => calculateMortgage(mortgage), [mortgage]);
@@ -386,13 +393,14 @@ const projectedSavings = useMemo(
       }
 
       let val = bucket.projected;
-      // Apply 25% LISA penalty if accessing before age 60
+      
+      // 1. Calculate the 25% penalty if it's an early LISA withdrawal
       if (bucket.type === 'lisa' && retirementAge < 60) {
         val = val * 0.75;
       }
 
-      // Pension Lock Logic: Exclude pensions if retiring before access age
-      if (!isBucketAccessible(bucket.type, retirementAge)) {
+      // 2. Only block the pot if it's NOT a LISA and it's currently inaccessible
+      if (bucket.type !== 'lisa' && !isBucketAccessible(bucket.type, retirementAge)) {
         return sum;
       }
 
@@ -481,7 +489,7 @@ const projectedSavings = useMemo(
           budget={budget}
           tax={tax}
           targetGross={targetGross}
-          sippNetContribution={taxSettings.sippNetContribution}
+          sippNetContribution={totalSippNet}
           setActiveSection={setActiveSection}
         />
       ) : null}

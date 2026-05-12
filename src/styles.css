@@ -685,4 +685,55 @@ h2 {
   .section-card small {
     font-size: 0.75rem;
   }
+
+  @media (max-width: 768px) {
+  /* Force the table row to be a single column block */
+  .savings-table .table-row {
+    display: flex !important;
+    flex-direction: column !important;
+    gap: 8px !important;
+    padding: 16px !important;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    margin-bottom: 12px;
+    background: white;
+  }
+
+  /* Hide the header row on mobile - it makes no sense in a stack */
+  .savings-table .table-row.header {
+    display: none !important;
+  }
+
+  /* Make every cell take full width */
+  .savings-table .table-row > div {
+    width: 100% !important;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  /* Show the labels we added in the JSX (the "mobile-label" divs) */
+  .mobile-label {
+    display: block !important;
+    font-weight: 600;
+    font-size: 0.8rem;
+    color: #64748b;
+  }
+
+  /* Adjust inputs to fit the side of the label */
+  .savings-table input, 
+  .savings-table select, 
+  .savings-table .number-field {
+    width: 60% !important;
+  }
+
+  /* Move delete button to top right of the card */
+  .savings-table .delete-btn {
+    align-self: flex-end;
+    background: #fff5f5;
+    color: #c53030;
+    width: 100% !important;
+    margin-top: 8px;
+  }
+}
 }
