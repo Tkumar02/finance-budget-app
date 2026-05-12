@@ -32,8 +32,11 @@ export type SavingsBucket = {
   balance: number;
   monthly: number;
   annualRate: number;
-  type: "cash" | "isa" | "pension" | "lisa" | "workplace-pension";
+  type: "cash" | "isa" | "pension" | "lisa" | "workplace-pension" | "nhs-pension";
   isHidden?:boolean;
+  nhsSalary?: number;
+  nhsYearsService?: number;
+  nhsScheme?: "1995" | "2008" | "2015";
 };
 
 export type MortgageInputs = {

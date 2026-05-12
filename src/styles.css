@@ -68,17 +68,37 @@ label {
 
 .topbar {
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 24px;
-  padding-bottom: 22px;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 20px;
+  padding-bottom: 32px;
+  text-align: center;
 }
 
 .plan-actions {
   display: flex;
-  flex-direction: column;
-  align-items: flex-end;
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
   gap: 12px;
+  flex-wrap: wrap;
+}
+
+@media (max-width: 720px) {
+  .plan-actions {
+    align-items: stretch;
+    width: 100%;
+  }
+  
+  .plan-selector {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  
+  .plan-selector select {
+    width: 100%;
+  }
 }
 
 .plan-selector {
@@ -339,23 +359,44 @@ h2 {
   gap: 8px;
 }
 
+.delete-btn {
+  background: #fdf1f1;
+  color: #a7332f;
+  border: 1px solid #f5d3d1;
+  width: 38px;
+  height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.2rem;
+  padding: 0;
+  transition: all 0.2s;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.delete-btn:hover {
+  background: #a7332f;
+  color: white;
+}
+
 .table {
   margin-bottom: 22px;
 }
 
 .table-row {
   display: grid;
-  grid-template-columns: minmax(160px, 1.4fr) repeat(3, minmax(90px, 1fr));
+  grid-template-columns: minmax(160px, 1.4fr) repeat(3, minmax(90px, 1fr)) 44px;
   gap: 8px;
   align-items: center;
 }
 
 .income-table .table-row {
-  grid-template-columns: minmax(160px, 1.3fr) repeat(4, minmax(100px, 1fr));
+  grid-template-columns: minmax(160px, 1.3fr) repeat(4, minmax(100px, 1fr)) 44px;
 }
 
 .savings-table .table-row {
-  grid-template-columns: 40px minmax(160px, 1.3fr) repeat(4, minmax(100px, 1fr));
+  grid-template-columns: 40px minmax(160px, 1.3fr) repeat(4, minmax(100px, 1fr)) 44px;
 }
 
 .table-row.deselected {
@@ -388,12 +429,12 @@ h2 {
 .expense-row,
 .budget-row {
   display: grid;
-  grid-template-columns: minmax(110px, 1fr) minmax(90px, 130px);
+  grid-template-columns: minmax(110px, 1fr) minmax(90px, 130px) 44px;
   gap: 8px;
 }
 
 .budget-row {
-  grid-template-columns: minmax(140px, 1fr) minmax(120px, 160px) minmax(90px, 140px);
+  grid-template-columns: minmax(140px, 1fr) minmax(120px, 160px) minmax(90px, 140px) 44px;
 }
 
 .mini-total {
@@ -539,7 +580,19 @@ h2 {
   }
 }
 
+.mobile-label {
+  display: none;
+}
+
+.desktop-only {
+  display: block;
+}
+
 @media (max-width: 720px) {
+  .desktop-only {
+    display: none;
+  }
+  /* ... rest of media query ... */
   .app-shell {
     padding: 18px;
   }
@@ -579,6 +632,21 @@ h2 {
 
   .table-row.header {
     display: none;
+  }
+
+  .delete-btn {
+    width: 100%;
+    margin-top: 4px;
+    height: 44px;
+  }
+
+  .mobile-label {
+    display: block;
+    font-size: 0.72rem;
+    font-weight: 800;
+    color: #6a7c76;
+    margin-bottom: 2px;
+    text-transform: uppercase;
   }
 
   .metric strong {
