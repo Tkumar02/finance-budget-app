@@ -7,6 +7,7 @@ export type PayeIncome = {
   pensionRate: number;
   employerPensionContribution: number;
   taxPaid: number;
+  pensionType?: "standard" | "nhs";
 };
 
 export type ExpenseLine = {
@@ -125,6 +126,19 @@ export function personalAllowance(adjustedNetIncome: number, taxCode: string) {
   const taper = Math.max(0, (adjustedNetIncome - 100000) / 2);
   return Math.max(0, baseAllowance - taper);
 }
+
+export function calculateNhsEmployeeRate(gross: number) {
+  const annual = clampNumber(gross);
+  if (annual <= 13247) return 5.2;
+  if (annual <= 17673) return 6.5;
+  if (annual <= 24022) return 8.3;
+  if (annual <= 25146) return 9.8;
+  if (annual <= 30638) return 10.7;
+  if (annual <= 45996) return 12.5;
+  return 13.5;
+}
+
+export const NHS_EMPLOYER_RATE = 23.7;
 
 export function calculateIncomeTax(
   taxableIncomeBeforeAllowance: number,

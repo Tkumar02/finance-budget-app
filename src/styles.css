@@ -392,7 +392,7 @@ h2 {
 }
 
 .income-table .table-row {
-  grid-template-columns: minmax(160px, 1.3fr) repeat(4, minmax(100px, 1fr)) 44px;
+  grid-template-columns: minmax(160px, 1.3fr) repeat(5, minmax(100px, 1fr)) 44px;
 }
 
 .savings-table .table-row {

@@ -38,6 +38,8 @@ import {
   monthlyMoney,
   projectSavings,
   requiredGrossForNet,
+  calculateNhsEmployeeRate,
+  NHS_EMPLOYER_RATE,
 } from "./calculations";
 import "./styles.css";
 
@@ -306,27 +308,36 @@ function App() {
     [savings],
   );
 const projectionBuckets = useMemo(() => {
-    // 1. Calculate the TOTAL employer contribution from ALL jobs
-    const totalEmployerMonthly = paye.reduce((sum, job) => {
+    // 1. Separate standard and NHS contributions
+    const standardEmployerMonthly = paye.filter(j => (j.pensionType || 'standard') === 'standard').reduce((sum, job) => {
       const monthly = (job.gross * (job.employerPensionContribution || 0)) / 1200;
       return sum + monthly;
     }, 0);
 
-    // 2. Calculate the TOTAL employee contribution from ALL jobs
-    // (This assumes tax.employmentPensionTotal is already the sum of all jobs)
-    const totalEmployeeMonthly = tax.employmentPensionTotal / 12;
+    const nhsEmployerMonthly = paye.filter(j => j.pensionType === 'nhs').reduce((sum, job) => {
+      const monthly = (job.gross * (job.employerPensionContribution || 0)) / 1200;
+      return sum + monthly;
+    }, 0);
+
+    const standardEmployeeMonthly = paye.filter(j => (j.pensionType || 'standard') === 'standard').reduce((sum, job) => {
+      return sum + (job.gross * (job.pensionRate || 0)) / 1200;
+    }, 0);
+
+    const nhsEmployeeMonthly = paye.filter(j => j.pensionType === 'nhs').reduce((sum, job) => {
+      return sum + (job.gross * (job.pensionRate || 0)) / 1200;
+    }, 0);
 
     return savings.map((bucket) => {
       if (bucket.type === "workplace-pension") {
         return { 
           ...bucket, 
-          // We add the base 'monthly' (usually 0) + both calculated totals
-          monthly: bucket.monthly + totalEmployeeMonthly + totalEmployerMonthly
+          monthly: bucket.monthly + standardEmployeeMonthly + standardEmployerMonthly
         };
       }
+      // NHS Pension is Defined Benefit; contributions don't build a 'pot balance'
       return bucket;
     });
-  }, [savings, tax.employmentPensionTotal, paye]);
+  }, [savings, paye]);
   const budget = useMemo(
     () => budgetSummary(tax.monthlyNet, budgetLines, annualBills, savingsForBudget),
     [tax.monthlyNet, budgetLines, annualBills, savingsForBudget],
@@ -355,6 +366,10 @@ const projectedSavings = useMemo(
     return true;
   };
 
+  const nhsJobsGross = useMemo(() => {
+    return paye.filter(j => j.pensionType === 'nhs').reduce((sum, j) => sum + j.gross, 0);
+  }, [paye]);
+
   const retirementSummary = useMemo(() => {
     // 1. Calculate the total monthly income from enabled pots using their specific rates
     const monthlyDrawdownFromEnabledPots = projectedSavings.reduce((sum, bucket) => {
@@ -363,7 +378,7 @@ const projectedSavings = useMemo(
 
       if (bucket.type === 'nhs-pension') {
         if (!isBucketAccessible(bucket.type, retirementAge)) return sum;
-        const salary = bucket.nhsSalary || 0;
+        const salary = nhsJobsGross || bucket.nhsSalary || 0;
         const yearsAtRetirement = (bucket.nhsYearsService || 0) + projectionYears;
         const accrual = bucket.nhsScheme === "1995" ? 80 : bucket.nhsScheme === "2008" ? 60 : 54;
         const annualNHSIncome = (salary / accrual) * yearsAtRetirement;
@@ -473,10 +488,9 @@ const projectedSavings = useMemo(
 
       {activeSection === "income" ? (
         <IncomeSection
-          paye={paye}
-          setPaye={setPaye}
-          selfEmployment={selfEmployment}
-          setSelfEmployment={setSelfEmployment}
+          paye={paye} setPaye={setPaye}
+          selfEmployment={selfEmployment} setSelfEmployment={setSelfEmployment}
+          savings={savings} setSavings={setSavings}
         />
       ) : null}
 
@@ -508,6 +522,7 @@ const projectedSavings = useMemo(
           allProjectedTotal={allProjectedTotal}
           employmentPensionMonthly={tax.employmentPensionTotal / 12}
           employerPensionMonthly={tax.employerPensionTotal / 12}
+          nhsJobsGross={nhsJobsGross}
         />
       ) : null}
 
@@ -712,12 +727,26 @@ function IncomeSection({
   setPaye,
   selfEmployment,
   setSelfEmployment,
+  savings,
+  setSavings,
 }: {
   paye: PayeIncome[];
   setPaye: React.Dispatch<React.SetStateAction<PayeIncome[]>>;
   selfEmployment: SelfEmployment[];
   setSelfEmployment: React.Dispatch<React.SetStateAction<SelfEmployment[]>>;
+  savings: SavingsBucket[];
+  setSavings: React.Dispatch<React.SetStateAction<SavingsBucket[]>>;
 }) {
+  const hasNhsJob = paye.some(j => j.pensionType === 'nhs');
+  const nhsBucket = savings.find(s => s.type === 'nhs-pension');
+  const nhsJobsGross = paye.filter(j => j.pensionType === 'nhs').reduce((sum, j) => sum + j.gross, 0);
+
+  const ensureNhsBucket = () => {
+    if (!nhsBucket) {
+      setSavings([...savings, { id: uid(), label: "NHS Pension", balance: 0, monthly: 0, annualRate: 0, type: "nhs-pension", nhsScheme: "2015", nhsYearsService: 0 }]);
+    }
+  };
+
   return (
     <div className="workspace">
       <section className="panel span-12">
@@ -725,21 +754,46 @@ function IncomeSection({
           title="PAYE Income"
           actionLabel="Add PAYE"
           onAction={() =>
-            setPaye([...paye, { id: uid(), label: "New PAYE job", gross: 0, pensionRate: 0, employerPensionContribution: 0, taxPaid: 0 }])
+            setPaye([...paye, { id: uid(), label: "New PAYE job", gross: 0, pensionRate: 0, employerPensionContribution: 0, taxPaid: 0, pensionType: "standard" }])
           }
         />
         <div className="table income-table">
           <div className="table-row header">
             <span>PAYE income</span>
             <span>Gross</span>
+            <span>Pension Type</span>
             <span>Employee pension %</span>
             <span>Employer pension</span>
             <span>Tax paid</span>
+            <span></span>
           </div>
           {paye.map((income) => (
             <div className="table-row" key={income.id}>
               <div><div className="mobile-label">Source</div><TextInput value={income.label} onChange={(label) => setPaye(updateItem(paye, income.id, { label }))} /></div>
-              <div><div className="mobile-label">Gross</div><NumberInput value={income.gross} onChange={(gross) => setPaye(updateItem(paye, income.id, { gross }))} /></div>
+              <div><div className="mobile-label">Gross</div><NumberInput value={income.gross} onChange={(gross) => {
+                const patch: any = { gross };
+                if (income.pensionType === 'nhs') {
+                   patch.pensionRate = calculateNhsEmployeeRate(gross);
+                   patch.employerPensionContribution = (gross * NHS_EMPLOYER_RATE) / 100;
+                }
+                setPaye(updateItem(paye, income.id, patch));
+              }} /></div>
+              <div>
+                <div className="mobile-label">Pension Type</div>
+                <select value={income.pensionType || "standard"} onChange={(e) => {
+                  const val = e.target.value as any;
+                  const patch: any = { pensionType: val };
+                  if (val === 'nhs') {
+                    patch.pensionRate = calculateNhsEmployeeRate(income.gross);
+                    patch.employerPensionContribution = (income.gross * NHS_EMPLOYER_RATE) / 100;
+                    ensureNhsBucket();
+                  }
+                  setPaye(updateItem(paye, income.id, patch));
+                }}>
+                  <option value="standard">Standard</option>
+                  <option value="nhs">NHS</option>
+                </select>
+              </div>
               <div><div className="mobile-label">Employee Pension %</div><NumberInput value={income.pensionRate} onChange={(pensionRate) => setPaye(updateItem(paye, income.id, { pensionRate }))} suffix="%" /></div>
               <div><div className="mobile-label">Employer Pension</div><NumberInput value={income.employerPensionContribution} onChange={(employerPensionContribution) => setPaye(updateItem(paye, income.id, { employerPensionContribution }))} /></div>
               <div><div className="mobile-label">Tax Paid</div><NumberInput value={income.taxPaid} onChange={(taxPaid) => setPaye(updateItem(paye, income.id, { taxPaid }))} /></div>
@@ -748,6 +802,37 @@ function IncomeSection({
           ))}
         </div>
       </section>
+
+      {hasNhsJob && (
+        <section className="panel span-12" style={{ background: '#f0f7ff', border: '2px dashed #3182ce' }}>
+          <div className="split-title">
+            <h2>NHS Pension Configuration</h2>
+            <div className="notice" style={{ maxWidth: 'none', border: 'none', padding: 0 }}>
+              Based on your NHS job(s), we need a few more details to estimate your retirement income.
+            </div>
+          </div>
+          {nhsBucket ? (
+            <div className="settings-grid">
+              <label>Total Years of Service (to date) 
+                <NumberInput value={nhsBucket.nhsYearsService || 0} onChange={(val) => setSavings(updateItem(savings, nhsBucket.id, { nhsYearsService: val }))} />
+              </label>
+              <label>Pension Scheme
+                <select value={nhsBucket.nhsScheme || "2015"} onChange={(e) => setSavings(updateItem(savings, nhsBucket.id, { nhsScheme: e.target.value as any }))}>
+                  <option value="1995">1995 Scheme (1/80)</option>
+                  <option value="2008">2008 Scheme (1/60)</option>
+                  <option value="2015">2015 Scheme (1/54)</option>
+                </select>
+              </label>
+              <div style={{ gridColumn: 'span 2', fontSize: '0.85rem', color: '#4a5568', marginTop: '10px' }}>
+                <strong>Projected Annual Income:</strong> The system will use your combined NHS job salary (£{nhsJobsGross.toLocaleString()}) 
+                and project it forward until your retirement at age 67.
+              </div>
+            </div>
+          ) : (
+            <button onClick={ensureNhsBucket}>Initialize NHS Pension Bucket</button>
+          )}
+        </section>
+      )}
 
       <section className="panel span-12">
         <PanelHeader
@@ -969,6 +1054,7 @@ function SavingsSection({
   allProjectedTotal,
   employmentPensionMonthly,
   employerPensionMonthly,
+  nhsJobsGross,
 }: {
   savings: SavingsBucket[];
   setSavings: React.Dispatch<React.SetStateAction<SavingsBucket[]>>;
@@ -979,6 +1065,7 @@ function SavingsSection({
   allProjectedTotal: number;
   employmentPensionMonthly: number;
   employerPensionMonthly: number;
+  nhsJobsGross: number;
 }) {
   return (
     <div className="workspace">
@@ -999,52 +1086,66 @@ function SavingsSection({
             <span>Monthly saving</span>
             <span>Growth %</span>
           </div>
-          {projectedSavings.map((bucket) => (
-            <React.Fragment key={bucket.id}>
-              <div className={`table-row ${bucket.isHidden ? "deselected" : ""}`}>
-                <div><div className="mobile-label">Show</div><input
-                  type="checkbox"
-                  checked={!bucket.isHidden}
-                  onChange={() => setSavings(updateItem(savings, bucket.id, { isHidden: !bucket.isHidden }))}
-                /></div>
-                <div><div className="mobile-label">Bucket Name</div><TextInput value={bucket.label} onChange={(label) => setSavings(updateItem(savings, bucket.id, { label }))} /></div>
-                <div><div className="mobile-label">Type</div><select value={bucket.type} onChange={(event) => setSavings(updateItem(savings, bucket.id, { type: event.target.value as SavingsBucket["type"] }))}>
-                  <option value="cash">Cash</option>
-                  <option value="isa">ISA</option>
-                  <option value="lisa">Lifetime ISA</option>
-                  <option value="pension">Pension / SIPP</option>
-                  <option value="workplace-pension">Workplace pension</option>
-                  <option value="nhs-pension">NHS Pension</option>
-                </select></div>
-                <div><div className="mobile-label">Balance</div><NumberInput value={bucket.balance} onChange={(balance) => setSavings(updateItem(savings, bucket.id, { balance }))} /></div>
-                <div><div className="mobile-label">Monthly</div><NumberInput 
-                  value={parseFloat(bucket.monthly.toFixed(2))} 
-                  onChange={(monthly) => setSavings(updateItem(savings, bucket.id, { monthly }))} 
-                /></div>
-                <div><div className="mobile-label">Growth Rate</div><NumberInput value={bucket.annualRate} onChange={(annualRate) => setSavings(updateItem(savings, bucket.id, { annualRate }))} suffix="%" /></div>
-                <button className="delete-btn" onClick={() => setSavings(savings.filter((s: any) => s.id !== bucket.id))}>×</button>
-              </div>
-              {bucket.type === 'nhs-pension' && (
-                <div className="panel" style={{ gridColumn: 'span 12', marginTop: '4px', background: '#f8fbfd', borderStyle: 'dashed' }}>
-                  <h4 style={{ margin: '0 0 10px 0', fontSize: '0.9rem', color: '#2c5282' }}>NHS Pension Estimation Questions</h4>
-                  <div className="settings-grid">
-                    <label>Current Annual Salary <NumberInput value={bucket.nhsSalary || 0} onChange={(val) => setSavings(updateItem(savings, bucket.id, { nhsSalary: val }))} /></label>
-                    <label>Total Years of Service <NumberInput value={bucket.nhsYearsService || 0} onChange={(val) => setSavings(updateItem(savings, bucket.id, { nhsYearsService: val }))} /></label>
-                    <label>Scheme Version
-                      <select value={bucket.nhsScheme || "2015"} onChange={(e) => setSavings(updateItem(savings, bucket.id, { nhsScheme: e.target.value as any }))}>
-                        <option value="1995">1995 Scheme (1/80)</option>
-                        <option value="2008">2008 Scheme (1/60)</option>
-                        <option value="2015">2015 Scheme (1/54)</option>
-                      </select>
-                    </label>
-                  </div>
-                  <p style={{ fontSize: '0.75rem', color: '#666', marginTop: '8px' }}>
-                    * Projection calculates annual pension as (Salary / Accrual) × Years. We assume years of service increases by 1 for every projection year.
-                  </p>
+          {projectedSavings.map((bucket) => {
+            const isNhs = bucket.type === 'nhs-pension';
+            let nhsIncome = 0;
+            if (isNhs) {
+              const salary = nhsJobsGross || bucket.nhsSalary || 0;
+              const yearsAtRetirement = (bucket.nhsYearsService || 0) + projectionYears;
+              const accrual = bucket.nhsScheme === "1995" ? 80 : bucket.nhsScheme === "2008" ? 60 : 54;
+              nhsIncome = (salary / accrual) * yearsAtRetirement;
+            }
+
+            return (
+              <React.Fragment key={bucket.id}>
+                <div className={`table-row ${bucket.isHidden ? "deselected" : ""}`}>
+                  <div><div className="mobile-label">Show</div><input
+                    type="checkbox"
+                    checked={!bucket.isHidden}
+                    onChange={() => setSavings(updateItem(savings, bucket.id, { isHidden: !bucket.isHidden }))}
+                  /></div>
+                  <div><div className="mobile-label">Bucket Name</div><TextInput value={bucket.label} onChange={(label) => setSavings(updateItem(savings, bucket.id, { label }))} /></div>
+                  <div><div className="mobile-label">Type</div><select value={bucket.type} onChange={(event) => setSavings(updateItem(savings, bucket.id, { type: event.target.value as SavingsBucket["type"] }))}>
+                    <option value="cash">Cash</option>
+                    <option value="isa">ISA</option>
+                    <option value="lisa">Lifetime ISA</option>
+                    <option value="pension">Pension / SIPP</option>
+                    <option value="workplace-pension">Workplace pension</option>
+                    <option value="nhs-pension">NHS Pension</option>
+                  </select></div>
+                  <div><div className="mobile-label">Balance</div><NumberInput value={bucket.balance} onChange={(balance) => setSavings(updateItem(savings, bucket.id, { balance }))} /></div>
+                  <div><div className="mobile-label">Monthly</div><NumberInput 
+                    value={parseFloat(bucket.monthly.toFixed(2))} 
+                    onChange={(monthly) => setSavings(updateItem(savings, bucket.id, { monthly }))} 
+                  /></div>
+                  <div><div className="mobile-label">Growth Rate</div><NumberInput value={bucket.annualRate} onChange={(annualRate) => setSavings(updateItem(savings, bucket.id, { annualRate }))} suffix="%" /></div>
+                  <button className="delete-btn" onClick={() => setSavings(savings.filter((s: any) => s.id !== bucket.id))}>×</button>
                 </div>
-              )}
-            </React.Fragment>
-          ))}        </div>
+                {isNhs && (
+                  <div className="panel" style={{ gridColumn: 'span 12', marginTop: '4px', background: '#f8fbfd', borderStyle: 'dashed' }}>
+                    <h4 style={{ margin: '0 0 10px 0', fontSize: '0.9rem', color: '#2c5282' }}>NHS Pension Estimation (Defined Benefit)</h4>
+                    <div className="settings-grid">
+                      <label>Current Annual Salary <NumberInput value={bucket.nhsSalary || 0} onChange={(val) => setSavings(updateItem(savings, bucket.id, { nhsSalary: val }))} /></label>
+                      <label>Total Years of Service <NumberInput value={bucket.nhsYearsService || 0} onChange={(val) => setSavings(updateItem(savings, bucket.id, { nhsYearsService: val }))} /></label>
+                      <label>Scheme Version
+                        <select value={bucket.nhsScheme || "2015"} onChange={(e) => setSavings(updateItem(savings, bucket.id, { nhsScheme: e.target.value as any }))}>
+                          <option value="1995">1995 Scheme (1/80)</option>
+                          <option value="2008">2008 Scheme (1/60)</option>
+                          <option value="2015">2015 Scheme (1/54)</option>
+                        </select>
+                      </label>
+                    </div>
+                    <div style={{ marginTop: '10px', padding: '10px', background: '#ebf4ff', borderRadius: '4px' }}>
+                       <strong>Projected Annual Benefit:</strong> <span style={{ color: '#2b6cb0', fontSize: '1.1rem', fontWeight: 700 }}>{money.format(nhsIncome)} / year</span>
+                       <p style={{ margin: '4px 0 0 0', fontSize: '0.75rem', color: '#4a5568' }}>
+                         * Calculated as: (£{(nhsJobsGross || bucket.nhsSalary || 0).toLocaleString()} Salary / {bucket.nhsScheme === "1995" ? 80 : bucket.nhsScheme === "2008" ? 60 : 54} Accrual) × {(bucket.nhsYearsService || 0) + projectionYears} Years.
+                       </p>
+                    </div>
+                  </div>
+                )}
+              </React.Fragment>
+            );
+          })}        </div>
         <button
           onClick={() =>
             setSavings([...savings, { id: uid(), label: "New savings bucket", balance: 0, monthly: 0, annualRate: 3, type: "cash" }])
@@ -1205,9 +1306,9 @@ function DepletionChart({
   drawdownSettings, 
   retirementAge, 
   pensionAccessAge,
-  projectionYears
 }: any) {
   const years = [0, 5, 10, 15, 20, 25, 30];
+  const colors = ['#2c7363', '#a26013', '#a7332f', '#4a5568', '#3182ce', '#805ad5', '#d53f8c', '#e6a23c', '#67c23a'];
 
   const isAccessible = (type: string, age: number) => {
     if (type === 'lisa') return age >= 60;
@@ -1215,53 +1316,103 @@ function DepletionChart({
     if (type === 'nhs-pension') return age >= 67;
     return true;
   };
-  
-  const calculateTotalAtYear = (year: number) => {
-    return projectedSavings.reduce((sum: number, bucket: any) => {
-      if (bucket.type === 'nhs-pension') return sum; // NHS is income, not a depletable pot
-      
-      const settings = drawdownSettings[bucket.id] || { enabled: true, rate: 4 };
-      const r = bucket.annualRate / 100;
-      
-      if (!settings.enabled) {
-        return sum + bucket.projected * Math.pow(1 + r, year);
-      }
-      
-      const ageAtYear = retirementAge + year;
-      if (!isAccessible(bucket.type, ageAtYear)) {
-        return sum + bucket.projected * Math.pow(1 + r, year);
-      }
-      
-      const d = bucket.projected * (settings.rate / 100);
-      let balance;
-      if (r === 0) {
-        balance = bucket.projected - d * year;
-      } else {
-        balance = bucket.projected * Math.pow(1 + r, year) - d * (Math.pow(1 + r, year) - 1) / r;
-      }
-      return sum + Math.max(0, balance);
-    }, 0);
-  };
 
-  const data = years.map(year => ({
-    year,
-    age: Math.round(retirementAge + year),
-    total: calculateTotalAtYear(year)
-  }));
+  const data = years.map(year => {
+    const age = Math.round(retirementAge + year);
+    const buckets = projectedSavings
+      .filter((b: any) => b.type !== 'nhs-pension' && !b.isHidden)
+      .map((bucket: any) => {
+        const settings = drawdownSettings[bucket.id] || { enabled: true, rate: 4 };
+        const r = bucket.annualRate / 100;
+        let balance;
+        
+        if (!settings.enabled) {
+          balance = bucket.projected * Math.pow(1 + r, year);
+        } else if (!isAccessible(bucket.type, age)) {
+          balance = bucket.projected * Math.pow(1 + r, year);
+        } else {
+          const d = bucket.projected * (settings.rate / 100);
+          if (r === 0) {
+            balance = bucket.projected - d * year;
+          } else {
+            balance = bucket.projected * Math.pow(1 + r, year) - d * (Math.pow(1 + r, year) - 1) / r;
+          }
+        }
+        return { label: bucket.label, value: Math.max(0, balance) };
+      });
+    return { year, age, buckets };
+  });
 
-  const maxTotal = Math.max(1, ...data.map(d => d.total));
+  if (data[0].buckets.length === 0) return null;
 
   return (
     <div className="depletion-chart" style={{ marginTop: '24px' }}>
       <h3>Pot Depletion Projection</h3>
-      <div className="band-chart">
-        {data.map((point) => (
-          <div key={point.year}>
-            <span>Age {point.age} ({point.year}y)</span>
-            <div className="bar-track">
-              <div style={{ width: `${(point.total / maxTotal) * 100}%`, background: point.total > 1000 ? '#2c7363' : '#a7332f' }} />
-            </div>
-            <b>{money.format(point.total)}</b>
+      <LineChart data={data} years={years} colors={colors} />
+    </div>
+  );
+}
+
+function LineChart({ data, years, colors }: any) {
+  const width = 800;
+  const height = 400;
+  const padding = 60;
+  
+  const allValues = data.flatMap((d: any) => d.buckets.map((b: any) => b.value));
+  const maxVal = Math.max(1000, ...allValues);
+  
+  const getX = (year: number) => padding + (year / years[years.length - 1]) * (width - 2 * padding);
+  const getY = (val: number) => height - padding - (val / maxVal) * (height - 2 * padding);
+
+  const bucketNames = data[0].buckets.map((b: any) => b.label);
+
+  return (
+    <div className="line-chart-container">
+      <svg viewBox={`0 0 ${width} ${height}`} style={{ width: '100%', height: 'auto', background: '#fffaf1', borderRadius: '8px', border: '1px solid #e7e0d5' }}>
+        {/* Axes */}
+        <line x1={padding} y1={height - padding} x2={width - padding} y2={height - padding} stroke="#ccc" strokeWidth="1" />
+        <line x1={padding} y1={padding} x2={padding} y2={height - padding} stroke="#ccc" strokeWidth="1" />
+        
+        {/* Grid lines & Y labels */}
+        {[0, 0.25, 0.5, 0.75, 1].map(p => (
+          <g key={p}>
+             <line x1={padding} y1={getY(maxVal * p)} x2={width - padding} y2={getY(maxVal * p)} stroke="#f0ece4" strokeDasharray="4" />
+             <text x={padding - 10} y={getY(maxVal * p) + 4} textAnchor="end" fontSize="11" fill="#888">{money.format(maxVal * p)}</text>
+          </g>
+        ))}
+
+        {/* X labels */}
+        {data.map((d: any) => (
+          <g key={d.year}>
+            <text x={getX(d.year)} y={height - padding + 20} textAnchor="middle" fontSize="11" fill="#888">+{d.year}y</text>
+            <text x={getX(d.year)} y={height - padding + 35} textAnchor="middle" fontSize="10" fill="#aaa">Age {d.age}</text>
+          </g>
+        ))}
+
+        {/* Lines */}
+        {bucketNames.map((name: string, i: number) => {
+          const points = data.map((d: any) => {
+             const bucket = d.buckets.find((b: any) => b.label === name);
+             return `${getX(d.year)},${getY(bucket.value)}`;
+          }).join(' ');
+          return (
+            <polyline
+              key={name}
+              fill="none"
+              stroke={colors[i % colors.length]}
+              strokeWidth="3"
+              strokeLinejoin="round"
+              strokeLinecap="round"
+              points={points}
+            />
+          );
+        })}
+      </svg>
+      <div className="chart-legend" style={{ display: 'flex', flexWrap: 'wrap', gap: '12px', marginTop: '14px', justifyContent: 'center' }}>
+        {bucketNames.map((name: string, i: number) => (
+          <div key={name} style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <span style={{ width: '12px', height: '12px', borderRadius: '2px', background: colors[i % colors.length] }} />
+            <small style={{ fontWeight: 600, color: '#555' }}>{name}</small>
           </div>
         ))}
       </div>
