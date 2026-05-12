@@ -543,6 +543,8 @@ const projectedSavings = useMemo(
           setDrawdownSettings={setDrawdownSettings}
           isBucketAccessible={isBucketAccessible}
           pensionAccessAge={pensionAccessAge}
+          projectionYears={projectionYears}
+          setProjectionYears={setProjectionYears}
         />
       ) : null}
 
@@ -568,7 +570,7 @@ function ProfileSection({ birthYear, setBirthYear, birthMonth, setBirthMonth }: 
   );
 }
 
-function RetirementSection({ birthYear, setBirthYear, retirementAge, setRetirementAge, outgoings, setOutgoings, otherIncome, setOtherIncome, drawdownRate, setDrawdownRate, summary, projectedSavings, drawdownSettings, setDrawdownSettings, isBucketAccessible, pensionAccessAge }: any) {
+function RetirementSection({ birthYear, setBirthYear, retirementAge, setRetirementAge, outgoings, setOutgoings, otherIncome, setOtherIncome, drawdownRate, setDrawdownRate, summary, projectedSavings, drawdownSettings, setDrawdownSettings, isBucketAccessible, pensionAccessAge, projectionYears, setProjectionYears }: any) {
   const hasLisa = projectedSavings.some((b: any) => b.type === 'lisa');
   return (
     <div className="workspace">
@@ -582,6 +584,13 @@ function RetirementSection({ birthYear, setBirthYear, retirementAge, setRetireme
 
       <section className="panel span-12">
         <h2>Drawdown Strategy</h2>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <span style={{ fontSize: '0.9rem', color: '#666' }}>Projection Period:</span>
+            <div style={{ width: '100px' }}>
+              <NumberInput value={projectionYears} onChange={setProjectionYears} suffix="yrs" />
+            </div>
+          </div>
+        
         <div className="table retirement-table">
           <div className="table-row header">
             <span>Include</span>
@@ -1072,20 +1081,34 @@ function SavingsSection({
       <section className="panel span-12">
         <div className="split-title">
           <h2>Savings Projection</h2>
-          <label className="inline-field">
-            Years
-            <NumberInput value={projectionYears} onChange={setProjectionYears} />
-          </label>
+          {/* Constrained the Years input so it stays on the right */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <span style={{ fontSize: '0.9rem', color: '#666' }}>Projection Period:</span>
+            <div style={{ width: '100px' }}>
+              <NumberInput value={projectionYears} onChange={setProjectionYears} suffix="yrs" />
+            </div>
+          </div>
         </div>
+
         <div className="table savings-table">
-          <div className="table-row header">
+          <div 
+            className="table-row header" 
+            style={{ 
+              display: 'grid', 
+              gridTemplateColumns: '40px 1.5fr 1fr 1fr 1fr 1fr 40px', 
+              gap: '10px', 
+              alignItems: 'center' 
+            }}
+          >
             <span>Show</span>
             <span>Bucket</span>
             <span>Type</span>
             <span>Current capital</span>
             <span>Monthly saving</span>
             <span>Growth %</span>
+            <span></span>
           </div>
+          
           {projectedSavings.map((bucket) => {
             const isNhs = bucket.type === 'nhs-pension';
             let nhsIncome = 0;
@@ -1098,21 +1121,33 @@ function SavingsSection({
 
             return (
               <React.Fragment key={bucket.id}>
-                <div className={`table-row ${bucket.isHidden ? "deselected" : ""}`}>
+                {/* Main Row */}
+                <div 
+                  className={`table-row ${bucket.isHidden ? "deselected" : ""}`}
+                  style={{ 
+                    display: 'grid', 
+                    gridTemplateColumns: '40px 1.5fr 1fr 1fr 1fr 1fr 40px', 
+                    gap: '10px', 
+                    alignItems: 'center',
+                    padding: '8px 0'
+                  }}
+                >
                   <div><div className="mobile-label">Show</div><input
                     type="checkbox"
                     checked={!bucket.isHidden}
                     onChange={() => setSavings(updateItem(savings, bucket.id, { isHidden: !bucket.isHidden }))}
                   /></div>
                   <div><div className="mobile-label">Bucket Name</div><TextInput value={bucket.label} onChange={(label) => setSavings(updateItem(savings, bucket.id, { label }))} /></div>
-                  <div><div className="mobile-label">Type</div><select value={bucket.type} onChange={(event) => setSavings(updateItem(savings, bucket.id, { type: event.target.value as SavingsBucket["type"] }))}>
-                    <option value="cash">Cash</option>
-                    <option value="isa">ISA</option>
-                    <option value="lisa">Lifetime ISA</option>
-                    <option value="pension">Pension / SIPP</option>
-                    <option value="workplace-pension">Workplace pension</option>
-                    <option value="nhs-pension">NHS Pension</option>
-                  </select></div>
+                  <div><div className="mobile-label">Type</div>
+                    <select value={bucket.type} onChange={(event) => setSavings(updateItem(savings, bucket.id, { type: event.target.value as SavingsBucket["type"] }))}>
+                      <option value="cash">Cash</option>
+                      <option value="isa">ISA</option>
+                      <option value="lisa">Lifetime ISA</option>
+                      <option value="pension">Pension / SIPP</option>
+                      <option value="workplace-pension">Workplace pension</option>
+                      <option value="nhs-pension">NHS Pension</option>
+                    </select>
+                  </div>
                   <div><div className="mobile-label">Balance</div><NumberInput value={bucket.balance} onChange={(balance) => setSavings(updateItem(savings, bucket.id, { balance }))} /></div>
                   <div><div className="mobile-label">Monthly</div><NumberInput 
                     value={parseFloat(bucket.monthly.toFixed(2))} 
@@ -1121,44 +1156,42 @@ function SavingsSection({
                   <div><div className="mobile-label">Growth Rate</div><NumberInput value={bucket.annualRate} onChange={(annualRate) => setSavings(updateItem(savings, bucket.id, { annualRate }))} suffix="%" /></div>
                   <button className="delete-btn" onClick={() => setSavings(savings.filter((s: any) => s.id !== bucket.id))}>×</button>
                 </div>
+
+                {/* NHS Sub-Panel: Key fix for the 'Splay' issue */}
                 {isNhs && (
-                  <div className="panel" style={{ gridColumn: 'span 12', marginTop: '4px', background: '#f8fbfd', borderStyle: 'dashed' }}>
-                    <h4 style={{ margin: '0 0 10px 0', fontSize: '0.9rem', color: '#2c5282' }}>NHS Pension Estimation (Defined Benefit)</h4>
-                    <div className="settings-grid">
-                      <label>Current Annual Salary <NumberInput value={bucket.nhsSalary || 0} onChange={(val) => setSavings(updateItem(savings, bucket.id, { nhsSalary: val }))} /></label>
-                      <label>Total Years of Service <NumberInput value={bucket.nhsYearsService || 0} onChange={(val) => setSavings(updateItem(savings, bucket.id, { nhsYearsService: val }))} /></label>
-                      <label>Scheme Version
-                        <select value={bucket.nhsScheme || "2015"} onChange={(e) => setSavings(updateItem(savings, bucket.id, { nhsScheme: e.target.value as any }))}>
+                  <div style={{ gridColumn: '1 / -1', background: '#f8fbfd', padding: '16px', borderBottom: '1px solid #e2e8f0' }}>
+                    <h4 style={{ margin: '0 0 12px 0', fontSize: '0.8rem', color: '#2c5282', letterSpacing: '0.05em' }}>NHS PENSION CONFIGURATION</h4>
+                    <div className="settings-grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))' }}>
+                      <label>Annual Salary <NumberInput value={bucket.nhsSalary || 0} onChange={(val) => setSavings(updateItem(savings, bucket.id, { nhsSalary: val }))} /></label>
+                      <label>Service Years <NumberInput value={bucket.nhsYearsService || 0} onChange={(val) => setSavings(updateItem(savings, bucket.id, { nhsYearsService: val }))} /></label>
+                      <label>Scheme
+                        <select style={{ width: '100%', marginTop: '4px' }} value={bucket.nhsScheme || "2015"} onChange={(e) => setSavings(updateItem(savings, bucket.id, { nhsScheme: e.target.value as any }))}>
                           <option value="1995">1995 Scheme (1/80)</option>
                           <option value="2008">2008 Scheme (1/60)</option>
                           <option value="2015">2015 Scheme (1/54)</option>
                         </select>
                       </label>
                     </div>
-                    <div style={{ marginTop: '10px', padding: '10px', background: '#ebf4ff', borderRadius: '4px' }}>
-                       <strong>Projected Annual Benefit:</strong> <span style={{ color: '#2b6cb0', fontSize: '1.1rem', fontWeight: 700 }}>{money.format(nhsIncome)} / year</span>
-                       <p style={{ margin: '4px 0 0 0', fontSize: '0.75rem', color: '#4a5568' }}>
-                         * Calculated as: (£{(nhsJobsGross || bucket.nhsSalary || 0).toLocaleString()} Salary / {bucket.nhsScheme === "1995" ? 80 : bucket.nhsScheme === "2008" ? 60 : 54} Accrual) × {(bucket.nhsYearsService || 0) + projectionYears} Years.
-                       </p>
+                    <div style={{ marginTop: '12px', padding: '10px', background: '#ebf4ff', borderRadius: '4px' }}>
+                       <strong>Estimated Annual Benefit:</strong> <span style={{ color: '#2b6cb0', fontSize: '1.1rem', fontWeight: 700 }}>{money.format(nhsIncome)} / year</span>
                     </div>
                   </div>
                 )}
               </React.Fragment>
             );
-          })}        </div>
-        <button
-          onClick={() =>
-            setSavings([...savings, { id: uid(), label: "New savings bucket", balance: 0, monthly: 0, annualRate: 3, type: "cash" }])
-          }
+          })}
+        </div>
+
+        <button 
+          style={{ marginTop: '16px' }}
+          onClick={() => setSavings([...savings, { id: uid(), label: "New savings bucket", balance: 0, monthly: 0, annualRate: 3, type: "cash" }])}
         >
           Add savings bucket
         </button>
-        <div className="callout">
+
+        <div className="callout" style={{ marginTop: '20px' }}>
           <strong>{monthlyMoney.format(employmentPensionMonthly + employerPensionMonthly)}</strong>
-          <span>
-            monthly workplace pension projection includes employee pension deductions plus employer contributions.
-            Employer contributions are not used in the tax calculation.
-          </span>
+          <span> monthly workplace pension projection includes employee deductions + employer contributions.</span>
         </div>
       </section>
 
@@ -1166,18 +1199,19 @@ function SavingsSection({
         <div className="projection-bars">
           {projectedSavings.map((bucket) => (
             <div className={`projection-row ${bucket.isHidden ? "deselected" : ""}`} key={bucket.id}>
-              <div>
+              <div style={{ minWidth: '150px' }}>
                 <strong>{bucket.label}</strong>
-                <span>{bucket.type.toUpperCase()} - {monthlyMoney.format(bucket.monthly)}/mo</span>
               </div>
-              <div className="bar-track">
-                <div style={{ width: `${Math.max(3, (bucket.projected / Math.max(1, allProjectedTotal)) * 100)}%` }} />
+              <div className="bar-track" style={{ flex: 1, margin: '0 20px' }}>
+                <div style={{ width: `${Math.max(2, (bucket.projected / Math.max(1, allProjectedTotal)) * 100)}%` }} />
               </div>
-              <b>{money.format(bucket.projected)}</b>
+              <b style={{ minWidth: '100px', textAlign: 'right' }}>{money.format(bucket.projected)}</b>
             </div>
           ))}
         </div>
-        <Metric label={`Projected total in ${projectionYears} years`} value={money.format(projectedTotal)} tone="green" />
+        <div style={{ borderTop: '1px solid #eee', marginTop: '20px', paddingTop: '15px' }}>
+          <Metric label={`Projected total in ${projectionYears} years`} value={money.format(projectedTotal)} tone="green" />
+        </div>
       </section>
     </div>
   );

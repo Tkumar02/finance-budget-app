@@ -395,8 +395,27 @@ h2 {
   grid-template-columns: minmax(160px, 1.3fr) repeat(5, minmax(100px, 1fr)) 44px;
 }
 
-.savings-table .table-row {
-  grid-template-columns: 40px minmax(160px, 1.3fr) repeat(4, minmax(100px, 1fr)) 44px;
+.savings-row-wrapper {
+  display: grid;
+  gap: 8px;
+  border-bottom: 1px solid #e7e0d5;
+  padding: 8px 0;
+}
+
+.nhs-details-box {
+  margin-top: 8px;
+  padding: 14px;
+  background: #f8fbfd;
+  border: 1px dashed #bee3f8;
+  border-radius: 6px;
+}
+
+.projection-result {
+  margin-top: 12px;
+  padding: 10px;
+  background: #ebf4ff;
+  border-radius: 4px;
+  color: #2b6cb0;
 }
 
 .table-row.deselected {
