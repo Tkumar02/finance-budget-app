@@ -32,6 +32,7 @@ import {
   SelfEmployment,
   TaxSettings,
   budgetSummary,
+  calculateIncomeTax,
   calculateMortgage,
   calculateTaxSummary,
   money,
@@ -63,9 +64,9 @@ type Plan = {
     birthMonth: number;
     retirementAge: number;
     expectedOutgoings: number;
-    otherRetirementIncome: ExpenseLine[];
+    otherRetirementIncome: (ExpenseLine & { isTaxable?: boolean })[];
     drawdownRate: number;
-    drawdownSettings: Record<string, { enabled: boolean; rate: number }>;
+    drawdownSettings: Record<string, { enabled: boolean; rate: number; lumpSumTaken?: boolean }>;
   };
 };
 
@@ -164,8 +165,8 @@ function App() {
   const [birthMonth, setBirthMonth] = useState(1);
   const [expectedOutgoings, setExpectedOutgoings] = useState(0);
   const [drawdownRate, setDrawdownRate] = useState(4); // Defaulting to 4%
-  const [otherRetirementIncome, setOtherRetirementIncome] = useState<ExpenseLine[]>([]);
-  const [drawdownSettings, setDrawdownSettings] = useState<Record<string, { enabled: boolean; rate: number }>>({});
+  const [otherRetirementIncome, setOtherRetirementIncome] = useState<(ExpenseLine & { isTaxable?: boolean })[]>([]);
+  const [drawdownSettings, setDrawdownSettings] = useState<Record<string, { enabled: boolean; rate: number; lumpSumTaken?: boolean }>>({});
 
   const pensionAccessAge = useMemo(() => {
     // April 6, 1973 is the cut-off
@@ -299,20 +300,21 @@ function App() {
     createNewPlan();
   };
 
+  const totalSippNet = useMemo(() => {
+    return savings
+      .filter(s => s.label.toUpperCase().includes('SIPP') || s.label.toUpperCase().includes('PENSION'))
+      .reduce((sum, s) => sum + (s.monthly * 12), 0);
+  }, [savings]);
+
   const tax = useMemo(
-    () => calculateTaxSummary(paye, selfEmployment, taxSettings),
-    [paye, selfEmployment, taxSettings],
+    () => calculateTaxSummary(paye, selfEmployment, { ...taxSettings, sippNetContribution: totalSippNet }),
+    [paye, selfEmployment, taxSettings, totalSippNet],
   );
+
   const savingsForBudget = useMemo(
     () => savings.filter((bucket) => bucket.type !== "workplace-pension" && !bucket.isHidden),
     [savings],
   );
-
-  const totalSippNet = useMemo(() => {
-  return savings
-    .filter(s => s.type === 'pension' || s.type === 'lisa') // Add types as needed
-    .reduce((sum, s) => sum + (s.monthly * 12), 0);
-}, [savings]);
 
 const projectionBuckets = useMemo(() => {
     // 1. Separate standard and NHS contributions
@@ -346,8 +348,8 @@ const projectionBuckets = useMemo(() => {
     });
   }, [savings, paye]);
   const budget = useMemo(
-    () => budgetSummary(tax.monthlyNet, budgetLines, annualBills, savingsForBudget),
-    [tax.monthlyNet, budgetLines, annualBills, savingsForBudget],
+    () => budgetSummary(tax.monthlyNet, budgetLines, annualBills, savingsForBudget, mortgage.monthlyOverpayment),
+    [tax.monthlyNet, budgetLines, annualBills, savingsForBudget, mortgage.monthlyOverpayment],
   );
 const projectedSavings = useMemo(
   () => projectSavings(projectionBuckets, projectionYears,birthYear),
@@ -378,45 +380,79 @@ const projectedSavings = useMemo(
   }, [paye]);
 
   const retirementSummary = useMemo(() => {
-    // 1. Calculate the total monthly income from enabled pots using their specific rates
-    const monthlyDrawdownFromEnabledPots = projectedSavings.reduce((sum, bucket) => {
-      const settings = drawdownSettings[bucket.id] || { enabled: true, rate: 4 };
-      if (!settings.enabled) return sum;
+    let totalAnnualGross = 0;
+    let totalAnnualTaxable = 0;
+
+    projectedSavings.forEach((bucket) => {
+      const settings = drawdownSettings[bucket.id] || { enabled: true, rate: 4, lumpSumTaken: false };
+      if (!settings.enabled) return;
+
+      let annualIncome = 0;
+      let taxableIncome = 0;
 
       if (bucket.type === 'nhs-pension') {
-        if (!isBucketAccessible(bucket.type, retirementAge)) return sum;
+        if (!isBucketAccessible(bucket.type, retirementAge)) return;
         const salary = nhsJobsGross || bucket.nhsSalary || 0;
         const yearsAtRetirement = (bucket.nhsYearsService || 0) + projectionYears;
         const accrual = bucket.nhsScheme === "1995" ? 80 : bucket.nhsScheme === "2008" ? 60 : 54;
-        const annualNHSIncome = (salary / accrual) * yearsAtRetirement;
-        return sum + (annualNHSIncome / 12);
+        annualIncome = (salary / accrual) * yearsAtRetirement;
+        taxableIncome = annualIncome; // NHS pension is fully taxable
+      } else {
+        let val = bucket.projected;
+        
+        // 1. Calculate the 25% penalty if it's an early LISA withdrawal
+        if (bucket.type === 'lisa' && retirementAge < 60) {
+          val = val * 0.75;
+        }
+
+        // 2. Only block the pot if it's NOT a LISA and it's currently inaccessible
+        if (bucket.type !== 'lisa' && !isBucketAccessible(bucket.type, retirementAge)) {
+          return;
+        }
+
+        // Calculate annual drawdown for this specific pot
+        annualIncome = val * (settings.rate / 100);
+        
+        // Tax logic
+        if (bucket.type === 'isa' || (bucket.type === 'lisa' && retirementAge >= 60)) {
+          taxableIncome = 0;
+        } else if (bucket.type === 'pension' || bucket.type === 'workplace-pension') {
+          if (settings.lumpSumTaken) {
+            taxableIncome = annualIncome;
+          } else {
+            taxableIncome = annualIncome * 0.75; // 25% tax free
+          }
+        } else {
+           // Default for cash or other types if any
+           taxableIncome = 0; // Assuming cash is tax paid already
+        }
       }
 
-      let val = bucket.projected;
-      
-      // 1. Calculate the 25% penalty if it's an early LISA withdrawal
-      if (bucket.type === 'lisa' && retirementAge < 60) {
-        val = val * 0.75;
+      totalAnnualGross += annualIncome;
+      totalAnnualTaxable += taxableIncome;
+    });
+
+    otherRetirementIncome.forEach(item => {
+      totalAnnualGross += item.amount * 12;
+      if (item.isTaxable) {
+        totalAnnualTaxable += item.amount * 12;
       }
+    });
 
-      // 2. Only block the pot if it's NOT a LISA and it's currently inaccessible
-      if (bucket.type !== 'lisa' && !isBucketAccessible(bucket.type, retirementAge)) {
-        return sum;
-      }
-
-      // Calculate annual drawdown for this specific pot
-      const annualDrawdown = val * (settings.rate / 100);
-      return sum + (annualDrawdown / 12);
-    }, 0);
-
-    const monthlyOther = otherRetirementIncome.reduce((s, i) => s + i.amount, 0);
-    const totalMonthlyIn = monthlyDrawdownFromEnabledPots + monthlyOther;
+    const taxResult = calculateIncomeTax(totalAnnualTaxable, taxSettings.taxCode, 0, taxSettings.region);
+    const totalAnnualNet = totalAnnualGross - taxResult.totalTax;
+    const finalOutgoings = expectedOutgoings || budget.monthlyExpenses;
 
     return {
-      monthlyIn: totalMonthlyIn,
-      surplus: totalMonthlyIn - expectedOutgoings
+      annualGross: totalAnnualGross,
+      annualTaxable: totalAnnualTaxable,
+      annualTax: taxResult.totalTax,
+      annualNet: totalAnnualNet,
+      monthlyIn: totalAnnualNet / 12,
+      surplus: (totalAnnualNet / 12) - finalOutgoings,
+      taxResult
     };
-  }, [projectedSavings, retirementAge, otherRetirementIncome, expectedOutgoings, drawdownSettings, pensionAccessAge]);
+  }, [projectedSavings, retirementAge, otherRetirementIncome, expectedOutgoings, drawdownSettings, pensionAccessAge, nhsJobsGross, projectionYears, taxSettings, isBucketAccessible, budget.monthlyExpenses]);
 
 
   
@@ -503,7 +539,11 @@ const projectedSavings = useMemo(
       ) : null}
 
       {activeSection === "tax" ? (
-        <TaxSection tax={tax} taxSettings={taxSettings} setTaxSettings={setTaxSettings} />
+        <TaxSection 
+          tax={tax} 
+          taxSettings={taxSettings} 
+          setTaxSettings={setTaxSettings} 
+          totalSippNet={totalSippNet}/>
       ) : null}
 
       {activeSection === "budget" ? (
@@ -515,6 +555,7 @@ const projectedSavings = useMemo(
           annualBills={annualBills}
           setAnnualBills={setAnnualBills}
           savings={savingsForBudget}
+          mortgageOverpayment={mortgage.monthlyOverpayment}
           setActiveSection={setActiveSection}
         />
       ) : null}
@@ -541,9 +582,10 @@ const projectedSavings = useMemo(
       {activeSection === "retirement" ? (
         <RetirementSection
           birthYear={birthYear} setBirthYear={setBirthYear}
-          retirementAge={retirementAge} 
+          retirementAge={retirementAge}
           setRetirementAge={(targetAge: number) => setProjectionYears(Math.max(0, targetAge - currentAge))}
           outgoings={expectedOutgoings} setOutgoings={setExpectedOutgoings}
+          budgetExpenses={budget.monthlyExpenses}
           otherIncome={otherRetirementIncome} setOtherIncome={setOtherRetirementIncome}
           summary={retirementSummary}
           projectedSavings={projectedSavings}
@@ -555,7 +597,6 @@ const projectedSavings = useMemo(
           setProjectionYears={setProjectionYears}
         />
       ) : null}
-
       {activeSection === "profile" ? (
         <ProfileSection 
           birthYear={birthYear} setBirthYear={setBirthYear} 
@@ -578,15 +619,34 @@ function ProfileSection({ birthYear, setBirthYear, birthMonth, setBirthMonth }: 
   );
 }
 
-function RetirementSection({ birthYear, setBirthYear, retirementAge, setRetirementAge, outgoings, setOutgoings, otherIncome, setOtherIncome, drawdownRate, setDrawdownRate, summary, projectedSavings, drawdownSettings, setDrawdownSettings, isBucketAccessible, pensionAccessAge, projectionYears, setProjectionYears }: any) {
-  const hasLisa = projectedSavings.some((b: any) => b.type === 'lisa');
+function RetirementSection({ birthYear, setBirthYear, retirementAge, setRetirementAge, outgoings, setOutgoings, budgetExpenses, otherIncome, setOtherIncome, drawdownRate, setDrawdownRate, summary, projectedSavings, drawdownSettings, setDrawdownSettings, isBucketAccessible, pensionAccessAge, projectionYears, setProjectionYears }: any) {
+  const hasActiveLisa = projectedSavings.some((b: any) => b.type === 'lisa' && (drawdownSettings[b.id]?.enabled ?? true));
+  const finalOutgoings = outgoings || budgetExpenses;
+
   return (
     <div className="workspace">
       <section className="panel span-12">
         <h2>Retirement Settings</h2>
         <div className="settings-grid">
           <label>Target Retirement Age <input type="number" value={Math.round(retirementAge)} onChange={e => setRetirementAge(Number(e.target.value))} /></label>
-          <label>Expected Monthly Costs <NumberInput value={outgoings} onChange={setOutgoings} /></label>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+            <label>Expected Monthly Costs</label>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <NumberInput value={finalOutgoings} onChange={setOutgoings} />
+              {outgoings !== 0 && (
+                <button 
+                  onClick={() => setOutgoings(0)} 
+                  style={{ fontSize: '0.7rem', padding: '2px 6px' }}
+                  title="Reset to current budget expenses"
+                >
+                  Reset
+                </button>
+              )}
+            </div>
+            {outgoings === 0 && (
+              <small style={{ color: '#666' }}>Reflecting current budget: {money.format(budgetExpenses)}</small>
+            )}
+          </div>
         </div>
       </section>
 
@@ -603,10 +663,13 @@ function RetirementSection({ birthYear, setBirthYear, retirementAge, setRetireme
           <div className="table-row header">
             <span>Include</span>
             <span>Pot</span>
+            <span title="Tick if 25% tax-free lump sum already taken">Lump Sum?</span>
             <span>Drawdown %</span>
           </div>
           {projectedSavings.map((bucket: any) => {
             const accessible = isBucketAccessible(bucket.type, retirementAge);
+            const isPension = bucket.type === 'pension' || bucket.type === 'workplace-pension';
+            
             return (
               <div className={`table-row ${!accessible ? "deselected" : ""}`} key={bucket.id}>
                 <div>
@@ -624,6 +687,21 @@ function RetirementSection({ birthYear, setBirthYear, retirementAge, setRetireme
                   <div className="mobile-label">Pot</div>
                   <span>{bucket.label}</span>
                   {!accessible && <small style={{ display: 'block', color: '#a7332f' }}>Locked until age {bucket.type === 'lisa' ? 60 : bucket.type === 'nhs-pension' ? 67 : pensionAccessAge}</small>}
+                </div>
+                <div>
+                  <div className="mobile-label">Lump Sum?</div>
+                  {isPension ? (
+                    <input
+                      type="checkbox"
+                      checked={drawdownSettings[bucket.id]?.lumpSumTaken ?? false}
+                      onChange={() => {
+                        const current = drawdownSettings[bucket.id] || { enabled: true, rate: 4 };
+                        setDrawdownSettings({ ...drawdownSettings, [bucket.id]: { ...current, lumpSumTaken: !current.lumpSumTaken } });
+                      }}
+                    />
+                  ) : (
+                    <span style={{ color: '#ccc', fontSize: '0.8rem' }}>N/A</span>
+                  )}
                 </div>
                 <div>
                   <div className="mobile-label">Rate %</div>
@@ -650,13 +728,27 @@ function RetirementSection({ birthYear, setBirthYear, retirementAge, setRetireme
         <PanelHeader 
           title="Other Income Sources" 
           actionLabel="Add Source" 
-          onAction={() => setOtherIncome([...otherIncome, {id: uid(), label: "Other Income", amount: 0}])} 
+          onAction={() => setOtherIncome([...otherIncome, {id: uid(), label: "Other Income", amount: 0, isTaxable: true}])} 
         />
         <div className="budget-lines">
+          <div className="budget-row header desktop-only">
+            <span>Source</span>
+            <span>Monthly Amount</span>
+            <span>Taxable?</span>
+            <span></span>
+          </div>
           {otherIncome.map((item: any) => (
             <div key={item.id} className="budget-row">
-              <div><div className="mobile-label">Source</div><TextInput value={item.label} onChange={(l) => setOtherIncome(updateItem<ExpenseLine>(otherIncome, item.id, { label: l }))} /></div>
-              <div><div className="mobile-label">Amount</div><NumberInput value={item.amount} onChange={(a) => setOtherIncome(updateItem<ExpenseLine>(otherIncome, item.id, { amount: a }))} /></div>
+              <div><div className="mobile-label">Source</div><TextInput value={item.label} onChange={(l) => setOtherIncome(updateItem<any>(otherIncome, item.id, { label: l }))} /></div>
+              <div><div className="mobile-label">Amount</div><NumberInput value={item.amount} onChange={(a) => setOtherIncome(updateItem<any>(otherIncome, item.id, { amount: a }))} /></div>
+              <div>
+                <div className="mobile-label">Taxable?</div>
+                <input 
+                  type="checkbox" 
+                  checked={item.isTaxable ?? false} 
+                  onChange={(e) => setOtherIncome(updateItem<any>(otherIncome, item.id, { isTaxable: e.target.checked }))} 
+                />
+              </div>
               <button className="delete-btn" onClick={() => setOtherIncome(otherIncome.filter((i: any) => i.id !== item.id))}>×</button>
             </div>
           ))}
@@ -664,14 +756,17 @@ function RetirementSection({ birthYear, setBirthYear, retirementAge, setRetireme
       </section>
 
       <section className="panel span-6">
-        <h2>Post-Retirement Monthly Income</h2>
+        <h2>Post-Retirement Income Summary</h2>
         <ResultRows rows={[
-          ["Drawdown Income", summary.monthlyIn - otherIncome.reduce((s:any, i:any) => s + i.amount, 0)],
-          ["Other Income Sources", otherIncome.reduce((s:any, i:any) => s + i.amount, 0)],
-          ["Total Monthly In", summary.monthlyIn],
+          ["Annual Gross Income", summary.annualGross],
+          ["Annual Taxable Income", summary.annualTaxable],
+          ["Annual Income Tax", -summary.annualTax],
+          ["Annual Net Income", summary.annualNet],
+          ["Monthly Net Income", summary.monthlyIn],
+          ["Expected Outgoings", -finalOutgoings],
           ["Monthly Surplus/Deficit", summary.surplus],
         ]} />
-        {hasLisa && retirementAge < 60 && (
+        {hasActiveLisa && retirementAge < 60 && (
           <p style={{color: '#a7332f', fontSize: '0.8rem', marginTop: '10px'}}>
             * LISA 25% penalty applied for retirement before age 60.
           </p>
@@ -913,10 +1008,12 @@ function TaxSection({
   tax,
   taxSettings,
   setTaxSettings,
+  totalSippNet,
 }: {
   tax: ReturnType<typeof calculateTaxSummary>;
   taxSettings: TaxSettings;
   setTaxSettings: React.Dispatch<React.SetStateAction<TaxSettings>>;
+  totalSippNet: number,
 }) {
   return (
     <div className="workspace">
@@ -936,7 +1033,8 @@ function TaxSection({
           </label>
           <label>
             Annual SIPP paid by you (net)
-            <NumberInput value={taxSettings.sippNetContribution} onChange={(sippNetContribution) => setTaxSettings({ ...taxSettings, sippNetContribution })} />
+            <div style={{ padding: '8px 0', fontWeight: 'bold' }}>{money.format(totalSippNet)}</div>
+            <small style={{ color: '#666', display: 'block', marginTop: '-4px' }}>Derived from savings buckets (SIPP/Pension)</small>
           </label>
         </div>
         {tax.sippNetNeededToReach100k > 0 ? (
@@ -976,6 +1074,7 @@ function BudgetSection({
   annualBills,
   setAnnualBills,
   savings,
+  mortgageOverpayment,
   setActiveSection,
 }: {
   monthlyNet: number;
@@ -985,6 +1084,7 @@ function BudgetSection({
   annualBills: ExpenseLine[];
   setAnnualBills: React.Dispatch<React.SetStateAction<ExpenseLine[]>>;
   savings: SavingsBucket[];
+  mortgageOverpayment: number;
   setActiveSection: (section: SectionId) => void;
 }) {
   return (
@@ -1042,6 +1142,12 @@ function BudgetSection({
               <strong>{monthlyMoney.format(bucket.monthly)}</strong>
             </div>
           ))}
+          {mortgageOverpayment > 0 && (
+            <div key="mortgage-overpayment">
+              <span>Mortgage Overpayment</span>
+              <strong>{monthlyMoney.format(mortgageOverpayment)}</strong>
+            </div>
+          )}
         </div>
         <button className="wide-action" onClick={() => setActiveSection("savings")}>Edit savings buckets</button>
       </section>

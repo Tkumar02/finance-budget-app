@@ -230,7 +230,13 @@ export function calculateTaxSummary(incomes: PayeIncome[], streams: SelfEmployme
   };
 }
 
-export function budgetSummary(monthlyNet: number, lines: BudgetLine[], annualBills: ExpenseLine[] = [], savings: SavingsBucket[] = []) {
+export function budgetSummary(
+  monthlyNet: number,
+  lines: BudgetLine[],
+  annualBills: ExpenseLine[] = [],
+  savings: SavingsBucket[] = [],
+  mortgageOverpayment: number = 0
+) {
   const totals = lines.reduce<Record<BudgetLine["bucket"], number>>(
     (acc, line) => {
       acc[line.bucket] += clampNumber(line.amount);
@@ -239,7 +245,7 @@ export function budgetSummary(monthlyNet: number, lines: BudgetLine[], annualBil
     { living: 0, housing: 0, debt: 0, saving: 0, tax: 0 },
   );
   const annualBillsMonthly = annualBills.reduce((sum, bill) => sum + clampNumber(bill.amount) / 12, 0);
-  const monthlySavings = savings.reduce((sum, bucket) => sum + clampNumber(bucket.monthly), 0);
+  const monthlySavings = savings.reduce((sum, bucket) => sum + clampNumber(bucket.monthly), 0) + clampNumber(mortgageOverpayment);
   const monthlyExpenses = totals.living + totals.housing + totals.debt + totals.tax + annualBillsMonthly;
   const monthlyOut = monthlyExpenses + monthlySavings;
   return {
