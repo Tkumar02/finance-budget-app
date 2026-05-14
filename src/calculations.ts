@@ -21,6 +21,7 @@ export type SelfEmployment = {
   label: string;
   gross: number;
   expenses: ExpenseLine[];
+  isNiLiable?: boolean;
 };
 
 export type BudgetLine = ExpenseLine & {
@@ -58,13 +59,13 @@ export type TaxSettings = {
 export const money = new Intl.NumberFormat("en-GB", {
   style: "currency",
   currency: "GBP",
-  maximumFractionDigits: 0,
+  maximumFractionDigits: 2,
 });
 
 export const monthlyMoney = new Intl.NumberFormat("en-GB", {
   style: "currency",
   currency: "GBP",
-  maximumFractionDigits: 0,
+  maximumFractionDigits: 2,
 });
 
 const roundPounds = (value: number) => Math.round(value);
@@ -189,10 +190,43 @@ export function calculateIncomeTax(
   };
 }
 
+export function calculateNationalInsurance(taxableIncome: number, type: "class1" | "class4") {
+  const amount = Math.max(0, taxableIncome);
+  
+  // 2024/25 Rates (Standard for 2026 unless updated)
+  const primaryThreshold = 12570;
+  const upperLimit = 50270;
+  
+  const mainRate = type === "class1" ? 0.08 : 0.06; // 8% for PAYE, 6% for Self-Employed
+  const higherRate = 0.02;
+
+  let totalNi = 0;
+
+  if (amount > primaryThreshold) {
+    const mainBandAmount = Math.min(amount, upperLimit) - primaryThreshold;
+    totalNi += mainBandAmount * mainRate;
+  }
+
+  if (amount > upperLimit) {
+    const higherBandAmount = amount - upperLimit;
+    totalNi += higherBandAmount * higherRate;
+  }
+
+  return totalNi;
+}
+
 export function calculateTaxSummary(incomes: PayeIncome[], streams: SelfEmployment[], settings: TaxSettings) {
   const payeTaxable = totalPayeTaxable(incomes);
   const payeGross = totalPayeGross(incomes);
+  
+  // Self employment profit
   const selfProfit = selfEmploymentProfit(streams);
+  const niLiableSelfProfit = streams.reduce((sum, stream) => {
+    if (!stream.isNiLiable) return sum;
+    const expenses = stream.expenses.reduce((expenseSum, expense) => expenseSum + clampNumber(expense.amount), 0);
+    return sum + Math.max(0, clampNumber(stream.gross) - expenses);
+  }, 0);
+
   const grossReliefAtSourcePension = grossSippFromNet(settings.sippNetContribution);
   const combinedTaxable = payeTaxable + selfProfit;
   const combinedTax = calculateIncomeTax(
@@ -201,13 +235,21 @@ export function calculateTaxSummary(incomes: PayeIncome[], streams: SelfEmployme
     grossReliefAtSourcePension,
     settings.region,
   );
+  
   const payeOnlyTax = calculateIncomeTax(payeTaxable, settings.taxCode, 0, settings.region);
   const enteredTaxPaid = totalPayeTaxPaid(incomes);
   const assumedPayeTaxPaid = enteredTaxPaid > 0 ? enteredTaxPaid : payeOnlyTax.totalTax;
   const selfAssessmentDue = Math.max(0, combinedTax.totalTax - assumedPayeTaxPaid);
+  
+  // National Insurance
+  const payeNi = incomes.reduce((sum, income) => sum + calculateNationalInsurance(clampNumber(income.gross), "class1"), 0);
+  const selfNi = calculateNationalInsurance(niLiableSelfProfit, "class4");
+  const totalNi = payeNi + selfNi;
+
   const employmentPensionTotal = employmentPension(incomes);
   const employerPensionTotal = employerPensionContributions(incomes);
-  const netAnnual = payeGross - employmentPensionTotal - assumedPayeTaxPaid + selfProfit - selfAssessmentDue;
+  
+  const netAnnual = payeGross - employmentPensionTotal - assumedPayeTaxPaid - payeNi + selfProfit - selfAssessmentDue - selfNi;
   const sippGrossNeededToReach100k = Math.max(0, combinedTax.adjustedNetIncome - 100000);
   const sippNetNeededToReach100k = sippGrossNeededToReach100k * 0.8;
 
@@ -215,12 +257,16 @@ export function calculateTaxSummary(incomes: PayeIncome[], streams: SelfEmployme
     payeGross,
     payeTaxable,
     selfProfit,
+    niLiableSelfProfit,
     combinedTaxable,
     grossReliefAtSourcePension,
     payeOnlyTax,
     combinedTax,
     assumedPayeTaxPaid,
     selfAssessmentDue,
+    payeNi,
+    selfNi,
+    totalNi,
     sippGrossNeededToReach100k,
     sippNetNeededToReach100k,
     employmentPensionTotal,

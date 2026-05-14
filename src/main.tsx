@@ -35,6 +35,7 @@ import {
   calculateIncomeTax,
   calculateMortgage,
   calculateTaxSummary,
+  clampNumber,
   money,
   monthlyMoney,
   projectSavings,
@@ -67,6 +68,7 @@ type Plan = {
     otherRetirementIncome: (ExpenseLine & { isTaxable?: boolean })[];
     drawdownRate: number;
     drawdownSettings: Record<string, { enabled: boolean; rate: number; lumpSumTaken?: boolean }>;
+    inflationRate: number;
   };
 };
 
@@ -167,6 +169,7 @@ function App() {
   const [drawdownRate, setDrawdownRate] = useState(4); // Defaulting to 4%
   const [otherRetirementIncome, setOtherRetirementIncome] = useState<(ExpenseLine & { isTaxable?: boolean })[]>([]);
   const [drawdownSettings, setDrawdownSettings] = useState<Record<string, { enabled: boolean; rate: number; lumpSumTaken?: boolean }>>({});
+  const [inflationRate, setInflationRate] = useState(3);
 
   const pensionAccessAge = useMemo(() => {
     // April 6, 1973 is the cut-off
@@ -218,6 +221,7 @@ function App() {
     setDrawdownRate(d.drawdownRate || 4);
     setOtherRetirementIncome(d.otherRetirementIncome || []);
     setDrawdownSettings(d.drawdownSettings || {});
+    setInflationRate(d.inflationRate ?? 3);
   };
 
   const handleSavePlan = async () => {
@@ -237,6 +241,7 @@ function App() {
       drawdownRate,
       otherRetirementIncome,
       drawdownSettings,
+      inflationRate,
     };
 
     if (currentPlanId) {
@@ -288,8 +293,8 @@ function App() {
     setDrawdownRate(4);
     setOtherRetirementIncome([]);
     setDrawdownSettings({});
+    setInflationRate(3);
     };
-
   const handleDeletePlan = async () => {
     if (!currentPlanId || !window.confirm("Are you sure you want to delete this plan?")) return;
     const planRef = doc(db, "plans", currentPlanId);
@@ -302,8 +307,8 @@ function App() {
 
   const totalSippNet = useMemo(() => {
     return savings
-      .filter(s => s.label.toUpperCase().includes('SIPP') || s.label.toUpperCase().includes('PENSION'))
-      .reduce((sum, s) => sum + (s.monthly * 12), 0);
+      .filter(s => s.type === 'pension')
+      .reduce((sum, s) => sum + (clampNumber(s.monthly) * 12), 0);
   }, [savings]);
 
   const tax = useMemo(
@@ -441,18 +446,28 @@ const projectedSavings = useMemo(
 
     const taxResult = calculateIncomeTax(totalAnnualTaxable, taxSettings.taxCode, 0, taxSettings.region);
     const totalAnnualNet = totalAnnualGross - taxResult.totalTax;
-    const finalOutgoings = expectedOutgoings || budget.monthlyExpenses;
+    const currentMonthlyExpenses = expectedOutgoings || budget.monthlyExpenses;
+    
+    // Inflation Adjustment
+    const inflationFactor = Math.pow(1 + (inflationRate / 100), projectionYears);
+    const futureMonthlyExpenses = currentMonthlyExpenses * inflationFactor;
+    const realMonthlyNetIncome = (totalAnnualNet / 12) / inflationFactor;
 
     return {
       annualGross: totalAnnualGross,
       annualTaxable: totalAnnualTaxable,
       annualTax: taxResult.totalTax,
       annualNet: totalAnnualNet,
-      monthlyIn: totalAnnualNet / 12,
-      surplus: (totalAnnualNet / 12) - finalOutgoings,
-      taxResult
+      monthlyIn: totalAnnualNet / 12, // Nominal
+      realMonthlyIn: realMonthlyNetIncome,
+      currentMonthlyExpenses,
+      futureMonthlyExpenses,
+      surplus: (totalAnnualNet / 12) - futureMonthlyExpenses, // Nominal future surplus
+      realSurplus: realMonthlyNetIncome - currentMonthlyExpenses,
+      taxResult,
+      inflationFactor
     };
-  }, [projectedSavings, retirementAge, otherRetirementIncome, expectedOutgoings, drawdownSettings, pensionAccessAge, nhsJobsGross, projectionYears, taxSettings, isBucketAccessible, budget.monthlyExpenses]);
+  }, [projectedSavings, retirementAge, otherRetirementIncome, expectedOutgoings, drawdownSettings, pensionAccessAge, nhsJobsGross, projectionYears, taxSettings, isBucketAccessible, budget.monthlyExpenses, inflationRate]);
 
 
   
@@ -595,8 +610,11 @@ const projectedSavings = useMemo(
           pensionAccessAge={pensionAccessAge}
           projectionYears={projectionYears}
           setProjectionYears={setProjectionYears}
+          inflationRate={inflationRate}
+          setInflationRate={setInflationRate}
         />
       ) : null}
+
       {activeSection === "profile" ? (
         <ProfileSection 
           birthYear={birthYear} setBirthYear={setBirthYear} 
@@ -619,7 +637,7 @@ function ProfileSection({ birthYear, setBirthYear, birthMonth, setBirthMonth }: 
   );
 }
 
-function RetirementSection({ birthYear, setBirthYear, retirementAge, setRetirementAge, outgoings, setOutgoings, budgetExpenses, otherIncome, setOtherIncome, drawdownRate, setDrawdownRate, summary, projectedSavings, drawdownSettings, setDrawdownSettings, isBucketAccessible, pensionAccessAge, projectionYears, setProjectionYears }: any) {
+function RetirementSection({ birthYear, setBirthYear, retirementAge, setRetirementAge, outgoings, setOutgoings, budgetExpenses, otherIncome, setOtherIncome, drawdownRate, setDrawdownRate, summary, projectedSavings, drawdownSettings, setDrawdownSettings, isBucketAccessible, pensionAccessAge, projectionYears, setProjectionYears, inflationRate, setInflationRate }: any) {
   const hasActiveLisa = projectedSavings.some((b: any) => b.type === 'lisa' && (drawdownSettings[b.id]?.enabled ?? true));
   const finalOutgoings = outgoings || budgetExpenses;
 
@@ -630,7 +648,7 @@ function RetirementSection({ birthYear, setBirthYear, retirementAge, setRetireme
         <div className="settings-grid">
           <label>Target Retirement Age <input type="number" value={Math.round(retirementAge)} onChange={e => setRetirementAge(Number(e.target.value))} /></label>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-            <label>Expected Monthly Costs</label>
+            <label>Expected Monthly Costs (Today's Money)</label>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
               <NumberInput value={finalOutgoings} onChange={setOutgoings} />
               {outgoings !== 0 && (
@@ -647,6 +665,14 @@ function RetirementSection({ birthYear, setBirthYear, retirementAge, setRetireme
               <small style={{ color: '#666' }}>Reflecting current budget: {money.format(budgetExpenses)}</small>
             )}
           </div>
+          <label>Assumed Annual Inflation % 
+            <NumberInput value={inflationRate} onChange={setInflationRate} suffix="%" />
+          </label>
+        </div>
+        <div className="callout neutral">
+          <p style={{ fontSize: '0.9rem' }}>
+            <strong>Inflation Impact:</strong> In {projectionYears} years, your {money.format(finalOutgoings)} monthly cost will feel like <strong>{money.format(summary.futureMonthlyExpenses)}</strong>.
+          </p>
         </div>
       </section>
 
@@ -758,14 +784,15 @@ function RetirementSection({ birthYear, setBirthYear, retirementAge, setRetireme
       <section className="panel span-6">
         <h2>Post-Retirement Income Summary</h2>
         <ResultRows rows={[
-          ["Annual Gross Income", summary.annualGross],
-          ["Annual Taxable Income", summary.annualTaxable],
-          ["Annual Income Tax", -summary.annualTax],
-          ["Annual Net Income", summary.annualNet],
-          ["Monthly Net Income", summary.monthlyIn],
-          ["Expected Outgoings", -finalOutgoings],
-          ["Monthly Surplus/Deficit", summary.surplus],
+          ["Monthly Net (Nominal)", summary.monthlyIn],
+          ["Monthly Net (Today's Money)", summary.realMonthlyIn],
+          ["Future Monthly Costs", -summary.futureMonthlyExpenses],
+          ["Monthly Surplus (Future)", summary.surplus],
+          ["Real Surplus (Today's Money)", summary.realSurplus],
         ]} />
+        <div style={{ marginTop: '16px', fontSize: '0.85rem', color: '#666', borderTop: '1px solid #eee', paddingTop: '12px' }}>
+            <p><strong>Note:</strong> "Today's Money" accounts for your assumed {inflationRate}% inflation over {projectionYears} years.</p>
+        </div>
         {hasActiveLisa && retirementAge < 60 && (
           <p style={{color: '#a7332f', fontSize: '0.8rem', marginTop: '10px'}}>
             * LISA 25% penalty applied for retirement before age 60.
@@ -936,7 +963,7 @@ function IncomeSection({
                 </select>
               </label>
               <div style={{ gridColumn: 'span 2', fontSize: '0.85rem', color: '#4a5568', marginTop: '10px' }}>
-                <strong>Projected Annual Income:</strong> The system will use your combined NHS job salary (£{nhsJobsGross.toLocaleString()}) 
+                <strong>Projected Annual Income:</strong> The system will use your combined NHS job salary ({money.format(nhsJobsGross)}) 
                 and project it forward until your retirement at age 67.
               </div>
             </div>
@@ -964,6 +991,14 @@ function IncomeSection({
                 <label>
                   Gross income
                   <NumberInput value={stream.gross} onChange={(gross) => setSelfEmployment(updateItem(selfEmployment, stream.id, { gross }))} />
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.9rem', margin: '8px 0' }}>
+                  <input 
+                    type="checkbox" 
+                    checked={stream.isNiLiable ?? true} 
+                    onChange={(e) => setSelfEmployment(updateItem(selfEmployment, stream.id, { isNiLiable: e.target.checked }))} 
+                  />
+                  Liable to National Insurance?
                 </label>
                 <div className="expense-list">
                   {stream.expenses.map((expense) => (
@@ -1055,7 +1090,8 @@ function TaxSection({
             ["Self-employed profit", tax.selfProfit],
             ["Adjusted net income", tax.combinedTax.adjustedNetIncome],
             ["Personal allowance", tax.combinedTax.allowance],
-            ["Total income tax", tax.combinedTax.totalTax],
+            ["Income tax", tax.combinedTax.totalTax],
+            ["National Insurance", tax.totalNi],
             ["PAYE tax credited", tax.assumedPayeTaxPaid],
             ["Self assessment due", tax.selfAssessmentDue],
           ]}
