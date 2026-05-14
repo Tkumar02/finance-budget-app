@@ -41,7 +41,15 @@ button.wide-action {
   margin-top: 14px;
 }
 
-input,
+input[type="checkbox"] {
+  width: 20px;
+  height: 20px;
+  cursor: pointer;
+  accent-color: #24594f;
+  margin: 0;
+}
+
+input:not([type="checkbox"]),
 select {
   width: 100%;
   min-width: 0;
@@ -448,12 +456,23 @@ h2 {
 .expense-row,
 .budget-row {
   display: grid;
-  grid-template-columns: minmax(110px, 1fr) minmax(90px, 130px) 44px;
-  gap: 8px;
+  grid-template-columns: 2fr 1fr 44px;
+  gap: 12px;
+  align-items: center;
 }
 
 .budget-row {
-  grid-template-columns: minmax(140px, 1fr) minmax(120px, 160px) minmax(90px, 140px) 44px;
+  grid-template-columns: 2fr 1.2fr 1fr 44px;
+}
+
+.expense-row.header,
+.budget-row.header {
+  font-weight: 800;
+  color: #5f6f68;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  margin-bottom: 8px;
+  border: none;
 }
 
 .mini-total {
@@ -604,7 +623,7 @@ h2 {
 }
 
 .desktop-only {
-  display: block;
+  /* No default display so it doesn't override grid/flex rows */
 }
 
 @media (max-width: 720px) {

@@ -7,13 +7,14 @@ export type PayeIncome = {
   pensionRate: number;
   employerPensionContribution: number;
   taxPaid: number;
-  pensionType?: "standard" | "nhs";
+  pensionType?: "standard" | "nhs" | "civil-service" | "teachers";
 };
 
 export type ExpenseLine = {
   id: string;
   label: string;
   amount: number;
+  includeInRetirement?: boolean;
 };
 
 export type SelfEmployment = {
@@ -25,7 +26,7 @@ export type SelfEmployment = {
 };
 
 export type BudgetLine = ExpenseLine & {
-  bucket: "living" | "housing" | "debt" | "saving" | "tax";
+  bucket: "living" | "housing" | "debt" | "saving" | "tax" | "food" | "entertainment";
 };
 
 export type SavingsBucket = {
@@ -34,8 +35,11 @@ export type SavingsBucket = {
   balance: number;
   monthly: number;
   annualRate: number;
-  type: "cash" | "isa" | "pension" | "lisa" | "workplace-pension" | "nhs-pension";
+  type: "cash" | "isa" | "pension" | "lisa" | "workplace-private-pension" | "nhs-pension" | "civil-service-pension" | "teachers-pension";
   isHidden?:boolean;
+  dbSalary?: number;
+  dbYearsService?: number;
+  dbScheme?: string;
   nhsSalary?: number;
   nhsYearsService?: number;
   nhsScheme?: "1995" | "2008" | "2015";
@@ -288,11 +292,11 @@ export function budgetSummary(
       acc[line.bucket] += clampNumber(line.amount);
       return acc;
     },
-    { living: 0, housing: 0, debt: 0, saving: 0, tax: 0 },
+    { living: 0, housing: 0, debt: 0, saving: 0, tax: 0, food: 0, entertainment: 0 },
   );
   const annualBillsMonthly = annualBills.reduce((sum, bill) => sum + clampNumber(bill.amount) / 12, 0);
   const monthlySavings = savings.reduce((sum, bucket) => sum + clampNumber(bucket.monthly), 0) + clampNumber(mortgageOverpayment);
-  const monthlyExpenses = totals.living + totals.housing + totals.debt + totals.tax + annualBillsMonthly;
+  const monthlyExpenses = totals["living"] + totals["housing"] + totals["debt"] + totals["tax"] + totals["food"] + totals["entertainment"] + annualBillsMonthly;
   const monthlyOut = monthlyExpenses + monthlySavings;
   return {
     totals,
@@ -417,11 +421,22 @@ function calculateInterestWithoutOverpayments(amount: number, annualRate: number
 
 export function requiredGrossForNet(targetNet: number, taxCode: string, region: Region) {
   let low = 0;
-  let high = Math.max(50000, targetNet * 2.5);
+  let high = Math.max(50000, targetNet * 3); // Increased multiplier for more headroom with deductions
   for (let i = 0; i < 60; i += 1) {
     const mid = (low + high) / 2;
-    const tax = calculateIncomeTax(mid, taxCode, 0, region).totalTax;
-    const net = mid - tax;
+    
+    // Assume a conservative 15% pension contribution as requested
+    const pensionRate = 0.15;
+    const pensionContribution = mid * pensionRate;
+    
+    // Most workplace pensions (Net Pay) reduce taxable income but not NI income
+    const taxableIncome = Math.max(0, mid - pensionContribution);
+    
+    const tax = calculateIncomeTax(taxableIncome, taxCode, 0, region).totalTax;
+    const ni = calculateNationalInsurance(mid, "class1");
+    
+    const net = mid - tax - ni - pensionContribution;
+    
     if (net < targetNet) low = mid;
     else high = mid;
   }

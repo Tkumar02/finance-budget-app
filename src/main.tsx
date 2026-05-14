@@ -69,6 +69,7 @@ type Plan = {
     drawdownRate: number;
     drawdownSettings: Record<string, { enabled: boolean; rate: number; lumpSumTaken?: boolean }>;
     inflationRate: number;
+    additionalRetirementExpenses: ExpenseLine[];
   };
 };
 
@@ -170,6 +171,7 @@ function App() {
   const [otherRetirementIncome, setOtherRetirementIncome] = useState<(ExpenseLine & { isTaxable?: boolean })[]>([]);
   const [drawdownSettings, setDrawdownSettings] = useState<Record<string, { enabled: boolean; rate: number; lumpSumTaken?: boolean }>>({});
   const [inflationRate, setInflationRate] = useState(3);
+  const [additionalRetirementExpenses, setAdditionalRetirementExpenses] = useState<ExpenseLine[]>([]);
 
   const pensionAccessAge = useMemo(() => {
     // April 6, 1973 is the cut-off
@@ -222,6 +224,7 @@ function App() {
     setOtherRetirementIncome(d.otherRetirementIncome || []);
     setDrawdownSettings(d.drawdownSettings || {});
     setInflationRate(d.inflationRate ?? 3);
+    setAdditionalRetirementExpenses(d.additionalRetirementExpenses || []);
   };
 
   const handleSavePlan = async () => {
@@ -242,6 +245,7 @@ function App() {
       otherRetirementIncome,
       drawdownSettings,
       inflationRate,
+      additionalRetirementExpenses,
     };
 
     if (currentPlanId) {
@@ -294,7 +298,9 @@ function App() {
     setOtherRetirementIncome([]);
     setDrawdownSettings({});
     setInflationRate(3);
+    setAdditionalRetirementExpenses([]);
     };
+
   const handleDeletePlan = async () => {
     if (!currentPlanId || !window.confirm("Are you sure you want to delete this plan?")) return;
     const planRef = doc(db, "plans", currentPlanId);
@@ -317,18 +323,13 @@ function App() {
   );
 
   const savingsForBudget = useMemo(
-    () => savings.filter((bucket) => bucket.type !== "workplace-pension" && !bucket.isHidden),
+    () => savings.filter((bucket) => !["workplace-private-pension", "nhs-pension", "civil-service-pension", "teachers-pension"].includes(bucket.type) && !bucket.isHidden),
     [savings],
   );
 
 const projectionBuckets = useMemo(() => {
-    // 1. Separate standard and NHS contributions
+    // 1. Separate standard and public sector contributions
     const standardEmployerMonthly = paye.filter(j => (j.pensionType || 'standard') === 'standard').reduce((sum, job) => {
-      const monthly = (job.gross * (job.employerPensionContribution || 0)) / 1200;
-      return sum + monthly;
-    }, 0);
-
-    const nhsEmployerMonthly = paye.filter(j => j.pensionType === 'nhs').reduce((sum, job) => {
       const monthly = (job.gross * (job.employerPensionContribution || 0)) / 1200;
       return sum + monthly;
     }, 0);
@@ -337,18 +338,14 @@ const projectionBuckets = useMemo(() => {
       return sum + (job.gross * (job.pensionRate || 0)) / 1200;
     }, 0);
 
-    const nhsEmployeeMonthly = paye.filter(j => j.pensionType === 'nhs').reduce((sum, job) => {
-      return sum + (job.gross * (job.pensionRate || 0)) / 1200;
-    }, 0);
-
     return savings.map((bucket) => {
-      if (bucket.type === "workplace-pension") {
+      if (bucket.type === "workplace-private-pension") {
         return { 
           ...bucket, 
           monthly: bucket.monthly + standardEmployeeMonthly + standardEmployerMonthly
         };
       }
-      // NHS Pension is Defined Benefit; contributions don't build a 'pot balance'
+      // DB Pensions are Defined Benefit; contributions don't build a 'pot balance'
       return bucket;
     });
   }, [savings, paye]);
@@ -356,7 +353,19 @@ const projectionBuckets = useMemo(() => {
     () => budgetSummary(tax.monthlyNet, budgetLines, annualBills, savingsForBudget, mortgage.monthlyOverpayment),
     [tax.monthlyNet, budgetLines, annualBills, savingsForBudget, mortgage.monthlyOverpayment],
   );
-const projectedSavings = useMemo(
+
+  // Adjusted budget for overview to include the tax set-aside
+  const monthlyTaxSetAside = tax.selfAssessmentDue / 12;
+  const overviewBudget = useMemo(() => {
+    const monthlyOutWithTax = budget.monthlyOut + monthlyTaxSetAside;
+    return {
+      ...budget,
+      monthlyOut: monthlyOutWithTax,
+      monthlySurplus: tax.monthlyNet - monthlyOutWithTax,
+    };
+  }, [budget, monthlyTaxSetAside, tax.monthlyNet]);
+
+  const projectedSavings = useMemo(
   () => projectSavings(projectionBuckets, projectionYears,birthYear),
   [projectionBuckets, projectionYears],
 );
@@ -375,13 +384,21 @@ const projectedSavings = useMemo(
 
   const isBucketAccessible = (type: string, age: number) => {
     if (type === 'lisa') return age >= 60;
-    if (type === 'pension' || type === 'workplace-pension') return age >= pensionAccessAge;
-    if (type === 'nhs-pension') return age >= 67; // Assuming 67 for now
+    if (type === 'pension' || type === 'workplace-private-pension') return age >= pensionAccessAge;
+    if (['nhs-pension', 'civil-service-pension', 'teachers-pension'].includes(type)) return age >= 67; // State Pension Age for most
     return true;
   };
 
   const nhsJobsGross = useMemo(() => {
     return paye.filter(j => j.pensionType === 'nhs').reduce((sum, j) => sum + j.gross, 0);
+  }, [paye]);
+
+  const civilServiceJobsGross = useMemo(() => {
+    return paye.filter(j => j.pensionType === 'civil-service').reduce((sum, j) => sum + j.gross, 0);
+  }, [paye]);
+
+  const teachersJobsGross = useMemo(() => {
+    return paye.filter(j => j.pensionType === 'teachers').reduce((sum, j) => sum + j.gross, 0);
   }, [paye]);
 
   const retirementSummary = useMemo(() => {
@@ -395,13 +412,30 @@ const projectedSavings = useMemo(
       let annualIncome = 0;
       let taxableIncome = 0;
 
-      if (bucket.type === 'nhs-pension') {
+      if (['nhs-pension', 'civil-service-pension', 'teachers-pension'].includes(bucket.type)) {
         if (!isBucketAccessible(bucket.type, retirementAge)) return;
-        const salary = nhsJobsGross || bucket.nhsSalary || 0;
-        const yearsAtRetirement = (bucket.nhsYearsService || 0) + projectionYears;
-        const accrual = bucket.nhsScheme === "1995" ? 80 : bucket.nhsScheme === "2008" ? 60 : 54;
+        
+        let salary = bucket.dbSalary || 0;
+        let yearsAtRetirement = (bucket.dbYearsService || 0) + projectionYears;
+        let accrual = 54; // Default
+
+        if (bucket.type === 'nhs-pension') {
+            salary = nhsJobsGross || bucket.nhsSalary || bucket.dbSalary || 0;
+            yearsAtRetirement = (bucket.nhsYearsService || bucket.dbYearsService || 0) + projectionYears;
+            const scheme = bucket.nhsScheme || bucket.dbScheme || "2015";
+            accrual = scheme === "1995" ? 80 : scheme === "2008" ? 60 : 54;
+        } else if (bucket.type === 'civil-service-pension') {
+            salary = civilServiceJobsGross || bucket.dbSalary || 0;
+            const scheme = bucket.dbScheme || "alpha";
+            accrual = scheme === "classic" ? 80 : (scheme === "premium" || scheme === "nuvos") ? 60 : 43.1; // alpha is 2.32% or 1/43.1
+        } else if (bucket.type === 'teachers-pension') {
+            salary = teachersJobsGross || bucket.dbSalary || 0;
+            const scheme = bucket.dbScheme || "2015";
+            accrual = (scheme === "classic" || scheme === "80th") ? 80 : scheme === "60th" ? 60 : 57; // 2015 is 1/57
+        }
+
         annualIncome = (salary / accrual) * yearsAtRetirement;
-        taxableIncome = annualIncome; // NHS pension is fully taxable
+        taxableIncome = annualIncome;
       } else {
         let val = bucket.projected;
         
@@ -421,7 +455,7 @@ const projectedSavings = useMemo(
         // Tax logic
         if (bucket.type === 'isa' || (bucket.type === 'lisa' && retirementAge >= 60)) {
           taxableIncome = 0;
-        } else if (bucket.type === 'pension' || bucket.type === 'workplace-pension') {
+        } else if (bucket.type === 'pension' || bucket.type === 'workplace-private-pension') {
           if (settings.lumpSumTaken) {
             taxableIncome = annualIncome;
           } else {
@@ -446,7 +480,19 @@ const projectedSavings = useMemo(
 
     const taxResult = calculateIncomeTax(totalAnnualTaxable, taxSettings.taxCode, 0, taxSettings.region);
     const totalAnnualNet = totalAnnualGross - taxResult.totalTax;
-    const currentMonthlyExpenses = expectedOutgoings || budget.monthlyExpenses;
+    
+    // Detailed Retirement Cost Calculation
+    const retiredBudgetLinesTotal = budgetLines
+        .filter(l => l.includeInRetirement ?? true)
+        .reduce((sum, l) => sum + (l.amount || 0), 0);
+    
+    const retiredAnnualBillsTotal = annualBills
+        .filter(b => b.includeInRetirement ?? true)
+        .reduce((sum, b) => sum + (b.amount || 0) / 12, 0);
+
+    const additionalExpensesTotal = additionalRetirementExpenses.reduce((sum, e) => sum + (e.amount || 0), 0);
+
+    const currentMonthlyExpenses = retiredBudgetLinesTotal + retiredAnnualBillsTotal + additionalExpensesTotal;
     
     // Inflation Adjustment
     const inflationFactor = Math.pow(1 + (inflationRate / 100), projectionYears);
@@ -467,15 +513,15 @@ const projectedSavings = useMemo(
       taxResult,
       inflationFactor
     };
-  }, [projectedSavings, retirementAge, otherRetirementIncome, expectedOutgoings, drawdownSettings, pensionAccessAge, nhsJobsGross, projectionYears, taxSettings, isBucketAccessible, budget.monthlyExpenses, inflationRate]);
+  }, [projectedSavings, retirementAge, otherRetirementIncome, expectedOutgoings, drawdownSettings, pensionAccessAge, nhsJobsGross, civilServiceJobsGross, teachersJobsGross, projectionYears, taxSettings, isBucketAccessible, budget.monthlyExpenses, inflationRate, budgetLines, annualBills, additionalRetirementExpenses]);
 
 
   
   const sections = [
-    { id: "overview", title: "Overview", value: monthlyMoney.format(budget.monthlySurplus), detail: "monthly surplus" },
+    { id: "overview", title: "Overview", value: monthlyMoney.format(overviewBudget.monthlySurplus), detail: "monthly surplus" },
     { id: "income", title: "Income", value: money.format(tax.payeGross + tax.selfProfit), detail: "gross + profit" },
     { id: "tax", title: "Tax", value: monthlyMoney.format(tax.selfAssessmentDue / 12), detail: "monthly set-aside" },
-    { id: "budget", title: "Budget", value: monthlyMoney.format(budget.monthlyOut), detail: "monthly outflow" },
+    { id: "budget", title: "Budget", value: monthlyMoney.format(overviewBudget.monthlyOut), detail: "monthly outflow" },
     { id: "savings", title: "Savings", value: money.format(projectedTotal), detail: `${projectionYears} year projection` },
     { id: "mortgage", title: "Mortgage", value: `${mortgageSummary.payoffYears.toFixed(1)} yrs`, detail: "payoff estimate" },
     { id: "retirement", title: "Retirement", value: monthlyMoney.format(retirementSummary.monthlyIn), detail: "post-work income" },
@@ -537,10 +583,11 @@ const projectedSavings = useMemo(
 
       {activeSection === "overview" ? (
         <OverviewSection
-          budget={budget}
+          budget={overviewBudget}
           tax={tax}
           targetGross={targetGross}
           sippNetContribution={totalSippNet}
+          taxSetAside={monthlyTaxSetAside}
           setActiveSection={setActiveSection}
         />
       ) : null}
@@ -576,18 +623,20 @@ const projectedSavings = useMemo(
       ) : null}
 
       {activeSection === "savings" ? (
-        <SavingsSection
-          savings={savings}
-          setSavings={setSavings}
-          projectionYears={projectionYears}
-          setProjectionYears={setProjectionYears}
-          projectedSavings={projectedSavings}
-          projectedTotal={projectedTotal}
-          allProjectedTotal={allProjectedTotal}
-          employmentPensionMonthly={tax.employmentPensionTotal / 12}
-          employerPensionMonthly={tax.employerPensionTotal / 12}
-          nhsJobsGross={nhsJobsGross}
-        />
+          <SavingsSection
+            savings={savings}
+            setSavings={setSavings}
+            projectionYears={projectionYears}
+            setProjectionYears={setProjectionYears}
+            projectedSavings={projectedSavings}
+            projectedTotal={projectedTotal}
+            allProjectedTotal={allProjectedTotal}
+            employmentPensionMonthly={tax.employmentPensionTotal / 12}
+            employerPensionMonthly={tax.employerPensionTotal / 12}
+            nhsJobsGross={nhsJobsGross}
+            civilServiceJobsGross={civilServiceJobsGross}
+            teachersJobsGross={teachersJobsGross}
+          />
       ) : null}
 
       {activeSection === "mortgage" ? (
@@ -612,7 +661,13 @@ const projectedSavings = useMemo(
           setProjectionYears={setProjectionYears}
           inflationRate={inflationRate}
           setInflationRate={setInflationRate}
-        />
+          budgetLines={budgetLines}
+          setBudgetLines={setBudgetLines}
+          annualBills={annualBills}
+          setAnnualBills={setAnnualBills}
+          additionalExpenses={additionalRetirementExpenses}
+          setAdditionalExpenses={setAdditionalRetirementExpenses}
+          />
       ) : null}
 
       {activeSection === "profile" ? (
@@ -637,9 +692,60 @@ function ProfileSection({ birthYear, setBirthYear, birthMonth, setBirthMonth }: 
   );
 }
 
-function RetirementSection({ birthYear, setBirthYear, retirementAge, setRetirementAge, outgoings, setOutgoings, budgetExpenses, otherIncome, setOtherIncome, drawdownRate, setDrawdownRate, summary, projectedSavings, drawdownSettings, setDrawdownSettings, isBucketAccessible, pensionAccessAge, projectionYears, setProjectionYears, inflationRate, setInflationRate }: any) {
+function RetirementSection({ 
+  birthYear, 
+  setBirthYear, 
+  retirementAge, 
+  setRetirementAge, 
+  outgoings, 
+  setOutgoings, 
+  budgetExpenses, 
+  otherIncome, 
+  setOtherIncome, 
+  summary, 
+  projectedSavings, 
+  drawdownSettings, 
+  setDrawdownSettings, 
+  isBucketAccessible, 
+  pensionAccessAge, 
+  projectionYears, 
+  setProjectionYears, 
+  inflationRate, 
+  setInflationRate, 
+  budgetLines, 
+  setBudgetLines, 
+  annualBills, 
+  setAnnualBills, 
+  additionalExpenses, 
+  setAdditionalExpenses 
+}: {
+  birthYear: number;
+  setBirthYear: (y: number) => void;
+  retirementAge: number;
+  setRetirementAge: (a: number) => void;
+  outgoings: number;
+  setOutgoings: (o: number) => void;
+  budgetExpenses: number;
+  otherIncome: (ExpenseLine & { isTaxable?: boolean })[];
+  setOtherIncome: React.Dispatch<React.SetStateAction<(ExpenseLine & { isTaxable?: boolean })[]>>;
+  summary: any;
+  projectedSavings: any[];
+  drawdownSettings: any;
+  setDrawdownSettings: (s: any) => void;
+  isBucketAccessible: (type: string, age: number) => boolean;
+  pensionAccessAge: number;
+  projectionYears: number;
+  setProjectionYears: (y: number) => void;
+  inflationRate: number;
+  setInflationRate: (r: number) => void;
+  budgetLines: BudgetLine[];
+  setBudgetLines: React.Dispatch<React.SetStateAction<BudgetLine[]>>;
+  annualBills: ExpenseLine[];
+  setAnnualBills: React.Dispatch<React.SetStateAction<ExpenseLine[]>>;
+  additionalExpenses: ExpenseLine[];
+  setAdditionalExpenses: React.Dispatch<React.SetStateAction<ExpenseLine[]>>;
+}) {
   const hasActiveLisa = projectedSavings.some((b: any) => b.type === 'lisa' && (drawdownSettings[b.id]?.enabled ?? true));
-  const finalOutgoings = outgoings || budgetExpenses;
 
   return (
     <div className="workspace">
@@ -647,32 +753,73 @@ function RetirementSection({ birthYear, setBirthYear, retirementAge, setRetireme
         <h2>Retirement Settings</h2>
         <div className="settings-grid">
           <label>Target Retirement Age <input type="number" value={Math.round(retirementAge)} onChange={e => setRetirementAge(Number(e.target.value))} /></label>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-            <label>Expected Monthly Costs (Today's Money)</label>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <NumberInput value={finalOutgoings} onChange={setOutgoings} />
-              {outgoings !== 0 && (
-                <button 
-                  onClick={() => setOutgoings(0)} 
-                  style={{ fontSize: '0.7rem', padding: '2px 6px' }}
-                  title="Reset to current budget expenses"
-                >
-                  Reset
-                </button>
-              )}
-            </div>
-            {outgoings === 0 && (
-              <small style={{ color: '#666' }}>Reflecting current budget: {money.format(budgetExpenses)}</small>
-            )}
-          </div>
           <label>Assumed Annual Inflation % 
             <NumberInput value={inflationRate} onChange={setInflationRate} suffix="%" />
           </label>
         </div>
-        <div className="callout neutral">
-          <p style={{ fontSize: '0.9rem' }}>
-            <strong>Inflation Impact:</strong> In {projectionYears} years, your {money.format(finalOutgoings)} monthly cost will feel like <strong>{money.format(summary.futureMonthlyExpenses)}</strong>.
-          </p>
+      </section>
+
+      <section className="panel span-12">
+        <h2>Expected Retirement Expenses (Today's Money)</h2>
+        <div className="notice" style={{ marginBottom: '16px' }}>
+          Select which current expenses and annual bills will continue into retirement.
+        </div>
+        
+        <div className="budget-lines" style={{ maxHeight: '400px', overflowY: 'auto', border: '1px solid #eee', padding: '12px', borderRadius: '8px' }}>
+          <h4 style={{ margin: '0 0 10px 0', fontSize: '0.8rem', color: '#666' }}>MONTHLY EXPENSES</h4>
+          {budgetLines.map((line: any) => (
+            <div key={line.id} style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '8px 0', borderBottom: '1px solid #f9f9f9' }}>
+               <input 
+                 type="checkbox" 
+                 checked={line.includeInRetirement ?? true} 
+                 onChange={(e) => setBudgetLines(updateItem(budgetLines, line.id, { includeInRetirement: e.target.checked }))} 
+               />
+               <span style={{ flex: 1 }}>{line.label} <small style={{ color: '#888' }}>({line.bucket})</small></span>
+               <strong style={{ minWidth: '80px', textAlign: 'right' }}>{monthlyMoney.format(line.amount)}</strong>
+            </div>
+          ))}
+
+          <h4 style={{ margin: '20px 0 10px 0', fontSize: '0.8rem', color: '#666' }}>ANNUAL BILLS</h4>
+          {annualBills.map((bill: any) => (
+            <div key={bill.id} style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '8px 0', borderBottom: '1px solid #f9f9f9' }}>
+               <input 
+                 type="checkbox" 
+                 checked={bill.includeInRetirement ?? true} 
+                 onChange={(e) => setAnnualBills(updateItem(annualBills, bill.id, { includeInRetirement: e.target.checked }))} 
+               />
+               <span style={{ flex: 1 }}>{bill.label}</span>
+               <strong style={{ minWidth: '80px', textAlign: 'right' }}>{monthlyMoney.format(bill.amount / 12)} <small style={{ fontWeight: 400, color: '#888' }}>/mo</small></strong>
+            </div>
+          ))}
+
+          <h4 style={{ margin: '20px 0 10px 0', fontSize: '0.8rem', color: '#24594f', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            ADDITIONAL RETIREMENT COSTS
+            <button 
+              onClick={() => setAdditionalExpenses([...additionalExpenses, { id: uid(), label: "New Future Cost", amount: 0 }])}
+              style={{ fontSize: '0.7rem', height: '24px', minHeight: 'auto', padding: '0 8px' }}
+            >
+              + Add
+            </button>
+          </h4>
+          {additionalExpenses.map((item: any) => (
+            <div key={item.id} style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '8px 0', borderBottom: '1px solid #f9f9f9' }}>
+               <input type="checkbox" checked readOnly style={{ opacity: 0.5 }} />
+               <div style={{ flex: 1 }}>
+                 <TextInput value={item.label} onChange={(l) => setAdditionalExpenses(updateItem(additionalExpenses, item.id, { label: l }))} />
+               </div>
+               <div style={{ width: '100px' }}>
+                 <NumberInput value={item.amount} onChange={(a) => setAdditionalExpenses(updateItem(additionalExpenses, item.id, { amount: a }))} />
+               </div>
+               <button className="delete-btn" onClick={() => setAdditionalExpenses(additionalExpenses.filter((i: any) => i.id !== item.id))}>×</button>
+            </div>
+          ))}
+        </div>
+
+        <div className="callout neutral" style={{ marginTop: '16px' }}>
+           <ResultRows rows={[
+             ["Total Selected (Today's Money)", summary.currentMonthlyExpenses],
+             [`Adjusted for Inflation (${projectionYears} yrs)`, summary.futureMonthlyExpenses],
+           ]} />
         </div>
       </section>
 
@@ -817,12 +964,14 @@ function OverviewSection({
   tax,
   targetGross,
   sippNetContribution,
+  taxSetAside,
   setActiveSection,
 }: {
-  budget: ReturnType<typeof budgetSummary>;
+  budget: any;
   tax: ReturnType<typeof calculateTaxSummary>;
   targetGross: number;
   sippNetContribution: number;
+  taxSetAside: number;
   setActiveSection: (section: SectionId) => void;
 }) {
   return (
@@ -834,6 +983,7 @@ function OverviewSection({
             ["Monthly net income", tax.monthlyNet],
             ["Monthly expenses", budget.monthlyExpenses],
             ["Monthly savings", budget.monthlySavings],
+            ["Tax set-aside", taxSetAside],
             ["Monthly surplus", budget.monthlySurplus],
             ["Gross income needed for current plan", targetGross],
           ]}
@@ -877,12 +1027,32 @@ function IncomeSection({
   setSavings: React.Dispatch<React.SetStateAction<SavingsBucket[]>>;
 }) {
   const hasNhsJob = paye.some(j => j.pensionType === 'nhs');
+  const hasCivilServiceJob = paye.some(j => j.pensionType === 'civil-service');
+  const hasTeachersJob = paye.some(j => j.pensionType === 'teachers');
+
   const nhsBucket = savings.find(s => s.type === 'nhs-pension');
+  const civilServiceBucket = savings.find(s => s.type === 'civil-service-pension');
+  const teachersBucket = savings.find(s => s.type === 'teachers-pension');
+
   const nhsJobsGross = paye.filter(j => j.pensionType === 'nhs').reduce((sum, j) => sum + j.gross, 0);
+  const civilServiceJobsGross = paye.filter(j => j.pensionType === 'civil-service').reduce((sum, j) => sum + j.gross, 0);
+  const teachersJobsGross = paye.filter(j => j.pensionType === 'teachers').reduce((sum, j) => sum + j.gross, 0);
 
   const ensureNhsBucket = () => {
     if (!nhsBucket) {
-      setSavings([...savings, { id: uid(), label: "NHS Pension", balance: 0, monthly: 0, annualRate: 0, type: "nhs-pension", nhsScheme: "2015", nhsYearsService: 0 }]);
+      setSavings([...savings, { id: uid(), label: "NHS Pension", balance: 0, monthly: 0, annualRate: 0, type: "nhs-pension", dbScheme: "2015", dbYearsService: 0 }]);
+    }
+  };
+
+  const ensureCivilServiceBucket = () => {
+    if (!civilServiceBucket) {
+      setSavings([...savings, { id: uid(), label: "Civil Service Pension", balance: 0, monthly: 0, annualRate: 0, type: "civil-service-pension", dbScheme: "alpha", dbYearsService: 0 }]);
+    }
+  };
+
+  const ensureTeachersBucket = () => {
+    if (!teachersBucket) {
+      setSavings([...savings, { id: uid(), label: "Teachers' Pension", balance: 0, monthly: 0, annualRate: 0, type: "teachers-pension", dbScheme: "2015", dbYearsService: 0 }]);
     }
   };
 
@@ -927,11 +1097,20 @@ function IncomeSection({
                     patch.employerPensionContribution = (income.gross * NHS_EMPLOYER_RATE) / 100;
                     ensureNhsBucket();
                   }
+                  if (val === 'civil-service') {
+                    ensureCivilServiceBucket();
+                  }
+                  if (val === 'teachers') {
+                    ensureTeachersBucket();
+                  }
                   setPaye(updateItem(paye, income.id, patch));
                 }}>
                   <option value="standard">Standard</option>
                   <option value="nhs">NHS</option>
+                  <option value="civil-service">Civil Service</option>
+                  <option value="teachers">Teachers</option>
                 </select>
+
               </div>
               <div><div className="mobile-label">Employee Pension %</div><NumberInput value={income.pensionRate} onChange={(pensionRate) => setPaye(updateItem(paye, income.id, { pensionRate }))} suffix="%" /></div>
               <div><div className="mobile-label">Employer Pension</div><NumberInput value={income.employerPensionContribution} onChange={(employerPensionContribution) => setPaye(updateItem(paye, income.id, { employerPensionContribution }))} /></div>
@@ -969,6 +1148,68 @@ function IncomeSection({
             </div>
           ) : (
             <button onClick={ensureNhsBucket}>Initialize NHS Pension Bucket</button>
+          )}
+        </section>
+      )}
+
+      {hasCivilServiceJob && (
+        <section className="panel span-12" style={{ background: '#f6f1ff', border: '2px dashed #805ad5' }}>
+          <div className="split-title">
+            <h2>Civil Service Pension Configuration</h2>
+            <div className="notice" style={{ maxWidth: 'none', border: 'none', padding: 0 }}>
+              Provide details for your Civil Service pension estimation.
+            </div>
+          </div>
+          {civilServiceBucket ? (
+            <div className="settings-grid">
+              <label>Total Years of Service (to date) 
+                <NumberInput value={civilServiceBucket.dbYearsService || 0} onChange={(val) => setSavings(updateItem(savings, civilServiceBucket.id, { dbYearsService: val }))} />
+              </label>
+              <label>Pension Scheme
+                <select value={civilServiceBucket.dbScheme || "alpha"} onChange={(e) => setSavings(updateItem(savings, civilServiceBucket.id, { dbScheme: e.target.value as any }))}>
+                  <option value="alpha">Alpha (2.32%)</option>
+                  <option value="classic">Classic (1/80)</option>
+                  <option value="premium">Premium/Nuvos (1/60)</option>
+                </select>
+              </label>
+              <div style={{ gridColumn: 'span 2', fontSize: '0.85rem', color: '#4a5568', marginTop: '10px' }}>
+                <strong>Projected Annual Income:</strong> The system will use your combined Civil Service salary ({money.format(civilServiceJobsGross)}) 
+                and project it forward until your retirement at age 67.
+              </div>
+            </div>
+          ) : (
+            <button onClick={ensureCivilServiceBucket}>Initialize Civil Service Pension Bucket</button>
+          )}
+        </section>
+      )}
+
+      {hasTeachersJob && (
+        <section className="panel span-12" style={{ background: '#fff5f5', border: '2px dashed #e53e3e' }}>
+          <div className="split-title">
+            <h2>Teachers' Pension Configuration</h2>
+            <div className="notice" style={{ maxWidth: 'none', border: 'none', padding: 0 }}>
+              Provide details for your Teachers' pension estimation.
+            </div>
+          </div>
+          {teachersBucket ? (
+            <div className="settings-grid">
+              <label>Total Years of Service (to date) 
+                <NumberInput value={teachersBucket.dbYearsService || 0} onChange={(val) => setSavings(updateItem(savings, teachersBucket.id, { dbYearsService: val }))} />
+              </label>
+              <label>Pension Scheme
+                <select value={teachersBucket.dbScheme || "2015"} onChange={(e) => setSavings(updateItem(savings, teachersBucket.id, { dbScheme: e.target.value as any }))}>
+                  <option value="2015">TPS 2015 (1/57)</option>
+                  <option value="classic">TPS Final Salary (1/80)</option>
+                  <option value="60th">TPS Final Salary (1/60)</option>
+                </select>
+              </label>
+              <div style={{ gridColumn: 'span 2', fontSize: '0.85rem', color: '#4a5568', marginTop: '10px' }}>
+                <strong>Projected Annual Income:</strong> The system will use your combined Teachers salary ({money.format(teachersJobsGross)}) 
+                and project it forward until your retirement at age 67.
+              </div>
+            </div>
+          ) : (
+            <button onClick={ensureTeachersBucket}>Initialize Teachers' Pension Bucket</button>
           )}
         </section>
       )}
@@ -1142,7 +1383,10 @@ function BudgetSection({
                 <option value="housing">Housing</option>
                 <option value="debt">Debt</option>
                 <option value="tax">Tax</option>
+                <option value="food">Food</option>
+                <option value="entertainment">Entertainment</option>
               </select></div>
+
               <div><div className="mobile-label">Amount</div><NumberInput value={line.amount} onChange={(amount) => setBudgetLines(updateItem(budgetLines, line.id, { amount }))} /></div>
               <button className="delete-btn" onClick={() => setBudgetLines(budgetLines.filter((l: any) => l.id !== line.id))}>×</button>
             </div>
@@ -1214,6 +1458,8 @@ function SavingsSection({
   employmentPensionMonthly,
   employerPensionMonthly,
   nhsJobsGross,
+  civilServiceJobsGross,
+  teachersJobsGross,
 }: {
   savings: SavingsBucket[];
   setSavings: React.Dispatch<React.SetStateAction<SavingsBucket[]>>;
@@ -1225,6 +1471,8 @@ function SavingsSection({
   employmentPensionMonthly: number;
   employerPensionMonthly: number;
   nhsJobsGross: number;
+  civilServiceJobsGross: number;
+  teachersJobsGross: number;
 }) {
   return (
     <div className="workspace">
@@ -1260,13 +1508,28 @@ function SavingsSection({
           </div>
           
           {projectedSavings.map((bucket) => {
-            const isNhs = bucket.type === 'nhs-pension';
-            let nhsIncome = 0;
-            if (isNhs) {
-              const salary = nhsJobsGross || bucket.nhsSalary || 0;
-              const yearsAtRetirement = (bucket.nhsYearsService || 0) + projectionYears;
-              const accrual = bucket.nhsScheme === "1995" ? 80 : bucket.nhsScheme === "2008" ? 60 : 54;
-              nhsIncome = (salary / accrual) * yearsAtRetirement;
+            const isDbPension = ['nhs-pension', 'civil-service-pension', 'teachers-pension'].includes(bucket.type);
+            let dbIncome = 0;
+            if (isDbPension) {
+                let salary = bucket.dbSalary || 0;
+                let yearsAtRetirement = (bucket.dbYearsService || 0) + projectionYears;
+                let accrual = 54;
+
+                if (bucket.type === 'nhs-pension') {
+                    salary = nhsJobsGross || bucket.nhsSalary || bucket.dbSalary || 0;
+                    yearsAtRetirement = (bucket.nhsYearsService || bucket.dbYearsService || 0) + projectionYears;
+                    const scheme = bucket.nhsScheme || bucket.dbScheme || "2015";
+                    accrual = scheme === "1995" ? 80 : scheme === "2008" ? 60 : 54;
+                } else if (bucket.type === 'civil-service-pension') {
+                    salary = civilServiceJobsGross || bucket.dbSalary || 0;
+                    const scheme = bucket.dbScheme || "alpha";
+                    accrual = scheme === "classic" ? 80 : (scheme === "premium" || scheme === "nuvos") ? 60 : 43.1;
+                } else if (bucket.type === 'teachers-pension') {
+                    salary = teachersJobsGross || bucket.dbSalary || 0;
+                    const scheme = bucket.dbScheme || "2015";
+                    accrual = (scheme === "classic" || scheme === "80th") ? 80 : scheme === "60th" ? 60 : 57;
+                }
+                dbIncome = (salary / accrual) * yearsAtRetirement;
             }
 
             return (
@@ -1294,8 +1557,10 @@ function SavingsSection({
                       <option value="isa">ISA</option>
                       <option value="lisa">Lifetime ISA</option>
                       <option value="pension">Pension / SIPP</option>
-                      <option value="workplace-pension">Workplace pension</option>
+                      <option value="workplace-private-pension">Workplace private pension</option>
                       <option value="nhs-pension">NHS Pension</option>
+                      <option value="civil-service-pension">Civil Service Pension</option>
+                      <option value="teachers-pension">Teachers' Pension</option>
                     </select>
                   </div>
                   <div><div className="mobile-label">Balance</div><NumberInput value={bucket.balance} onChange={(balance) => setSavings(updateItem(savings, bucket.id, { balance }))} /></div>
@@ -1307,23 +1572,41 @@ function SavingsSection({
                   <button className="delete-btn" onClick={() => setSavings(savings.filter((s: any) => s.id !== bucket.id))}>×</button>
                 </div>
 
-                {/* NHS Sub-Panel: Key fix for the 'Splay' issue */}
-                {isNhs && (
+                {/* DB Sub-Panel */}
+                {isDbPension && (
                   <div style={{ gridColumn: '1 / -1', background: '#f8fbfd', padding: '16px', borderBottom: '1px solid #e2e8f0' }}>
-                    <h4 style={{ margin: '0 0 12px 0', fontSize: '0.8rem', color: '#2c5282', letterSpacing: '0.05em' }}>NHS PENSION CONFIGURATION</h4>
+                    <h4 style={{ margin: '0 0 12px 0', fontSize: '0.8rem', color: '#2c5282', letterSpacing: '0.05em' }}>PENSION CONFIGURATION</h4>
                     <div className="settings-grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))' }}>
-                      <label>Annual Salary <NumberInput value={bucket.nhsSalary || 0} onChange={(val) => setSavings(updateItem(savings, bucket.id, { nhsSalary: val }))} /></label>
-                      <label>Service Years <NumberInput value={bucket.nhsYearsService || 0} onChange={(val) => setSavings(updateItem(savings, bucket.id, { nhsYearsService: val }))} /></label>
+                      <label>Annual Salary <NumberInput value={bucket.dbSalary || bucket.nhsSalary || 0} onChange={(val) => setSavings(updateItem(savings, bucket.id, { dbSalary: val }))} /></label>
+                      <label>Service Years <NumberInput value={bucket.dbYearsService || bucket.nhsYearsService || 0} onChange={(val) => setSavings(updateItem(savings, bucket.id, { dbYearsService: val }))} /></label>
                       <label>Scheme
-                        <select style={{ width: '100%', marginTop: '4px' }} value={bucket.nhsScheme || "2015"} onChange={(e) => setSavings(updateItem(savings, bucket.id, { nhsScheme: e.target.value as any }))}>
-                          <option value="1995">1995 Scheme (1/80)</option>
-                          <option value="2008">2008 Scheme (1/60)</option>
-                          <option value="2015">2015 Scheme (1/54)</option>
+                        <select style={{ width: '100%', marginTop: '4px' }} value={bucket.dbScheme || bucket.nhsScheme || "2015"} onChange={(e) => setSavings(updateItem(savings, bucket.id, { dbScheme: e.target.value as any }))}>
+                          {bucket.type === 'nhs-pension' && (
+                            <>
+                              <option value="1995">1995 Scheme (1/80)</option>
+                              <option value="2008">2008 Scheme (1/60)</option>
+                              <option value="2015">2015 Scheme (1/54)</option>
+                            </>
+                          )}
+                          {bucket.type === 'civil-service-pension' && (
+                            <>
+                              <option value="alpha">Alpha (2.32%)</option>
+                              <option value="classic">Classic (1/80)</option>
+                              <option value="premium">Premium/Nuvos (1/60)</option>
+                            </>
+                          )}
+                          {bucket.type === 'teachers-pension' && (
+                            <>
+                              <option value="2015">TPS 2015 (1/57)</option>
+                              <option value="classic">TPS Final Salary (1/80)</option>
+                              <option value="60th">TPS Final Salary (1/60)</option>
+                            </>
+                          )}
                         </select>
                       </label>
                     </div>
                     <div style={{ marginTop: '12px', padding: '10px', background: '#ebf4ff', borderRadius: '4px' }}>
-                       <strong>Estimated Annual Benefit:</strong> <span style={{ color: '#2b6cb0', fontSize: '1.1rem', fontWeight: 700 }}>{money.format(nhsIncome)} / year</span>
+                       <strong>Estimated Annual Benefit:</strong> <span style={{ color: '#2b6cb0', fontSize: '1.1rem', fontWeight: 700 }}>{money.format(dbIncome)} / year</span>
                     </div>
                   </div>
                 )}
@@ -1433,9 +1716,10 @@ function NumberInput({ value, onChange, suffix }: { value: number; onChange: (va
 }
 
 function ResultRows({ rows }: { rows: [string, number][] }) {
+  const filteredRows = rows.filter(([_, value]) => Math.abs(value) >= 0.01);
   return (
     <div className="result-rows">
-      {rows.map(([label, value]) => (
+      {filteredRows.map(([label, value]) => (
         <div key={label}>
           <span>{label}</span>
           <strong>{money.format(value)}</strong>
@@ -1496,15 +1780,15 @@ function DepletionChart({
 
   const isAccessible = (type: string, age: number) => {
     if (type === 'lisa') return age >= 60;
-    if (type === 'pension' || type === 'workplace-pension') return age >= pensionAccessAge;
-    if (type === 'nhs-pension') return age >= 67;
+    if (type === 'pension' || type === 'workplace-private-pension') return age >= pensionAccessAge;
+    if (['nhs-pension', 'civil-service-pension', 'teachers-pension'].includes(type)) return age >= 67;
     return true;
   };
 
   const data = years.map(year => {
     const age = Math.round(retirementAge + year);
     const buckets = projectedSavings
-      .filter((b: any) => b.type !== 'nhs-pension' && !b.isHidden)
+      .filter((b: any) => !['nhs-pension', 'civil-service-pension', 'teachers-pension'].includes(b.type) && !b.isHidden)
       .map((bucket: any) => {
         const settings = drawdownSettings[bucket.id] || { enabled: true, rate: 4 };
         const r = bucket.annualRate / 100;
