@@ -419,6 +419,44 @@ function calculateInterestWithoutOverpayments(amount: number, annualRate: number
   return interestTotal;
 }
 
+export function calculateRetirementGrossRequired(
+  targetNetFromPots: number,
+  taxableFraction: number,
+  taxCode: string,
+  region: Region,
+  baselineTaxableIncome: number = 0
+) {
+  const netFromTaxable = targetNetFromPots * taxableFraction;
+  const netFromNonTaxable = targetNetFromPots * (1 - taxableFraction);
+
+  const baselineTax = calculateIncomeTax(baselineTaxableIncome, taxCode, 0, region).totalTax;
+
+  // Solve for Gross Pension W such that:
+  // W - [Tax(W * 0.75 + baselineTaxable) - Tax(baselineTaxable)] = netFromTaxable
+  let low = 0;
+  let high = Math.max(100000, netFromTaxable * 3);
+  for (let i = 0; i < 60; i += 1) {
+    const mid = (low + high) / 2;
+    const totalTaxable = mid * 0.75 + baselineTaxableIncome;
+    const totalTax = calculateIncomeTax(totalTaxable, taxCode, 0, region).totalTax;
+    const extraTax = totalTax - baselineTax;
+    const net = mid - extraTax;
+    
+    if (net < netFromTaxable) low = mid;
+    else high = mid;
+  }
+  
+  const grossPension = high;
+  const totalAnnualTaxOnPots = calculateIncomeTax(grossPension * 0.75 + baselineTaxableIncome, taxCode, 0, region).totalTax - baselineTax;
+  
+  return {
+    grossPension,
+    netFromNonTaxable,
+    totalGrossAnnual: grossPension + netFromNonTaxable,
+    totalAnnualTaxOnPots
+  };
+}
+
 export function requiredGrossForNet(targetNet: number, taxCode: string, region: Region) {
   let low = 0;
   let high = Math.max(50000, targetNet * 3); // Increased multiplier for more headroom with deductions

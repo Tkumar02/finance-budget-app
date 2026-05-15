@@ -349,6 +349,69 @@ h2 {
   color: #a7332f;
 }
 
+.metric.pension-card {
+  background: #ecf4ee;
+  border-color: #24594f;
+}
+
+.metric.isa-card {
+  background: #fdf7e7;
+  border-color: #a26013;
+}
+
+.pension-text {
+  color: #24594f;
+}
+
+.isa-text {
+  color: #a26013;
+}
+
+.retirement-comparison-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+}
+
+@media (max-width: 720px) {
+  .retirement-comparison-grid {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+}
+
+.split-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 12px;
+  border-radius: 6px;
+  outline: none;
+  background: #a26013; /* Fallback */
+  background: linear-gradient(to right, #24594f 0%, #24594f var(--split-percent), #a26013 var(--split-percent), #a26013 100%) !important;
+  border: 1px solid #d8d3c8;
+}
+
+.split-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #fff;
+  border: 2px solid #555;
+  cursor: pointer;
+}
+
+.split-slider::-moz-range-thumb {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #fff;
+  border: 2px solid #555;
+  cursor: pointer;
+}
+
 .split-title {
   display: flex;
   align-items: center;

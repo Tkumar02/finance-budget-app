@@ -42,6 +42,7 @@ import {
   requiredGrossForNet,
   calculateNhsEmployeeRate,
   NHS_EMPLOYER_RATE,
+  calculateRetirementGrossRequired,
 } from "./calculations";
 import "./styles.css";
 
@@ -70,6 +71,7 @@ type Plan = {
     drawdownSettings: Record<string, { enabled: boolean; rate: number; lumpSumTaken?: boolean }>;
     inflationRate: number;
     additionalRetirementExpenses: ExpenseLine[];
+    retirementTaxableFraction?: number;
   };
 };
 
@@ -100,11 +102,11 @@ function AuthScreen() {
         <form onSubmit={handleSubmit}>
           <label>
             Email
-            <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
+            <input type="email" placeholder="you@example.com" value={email} onChange={(e) => setEmail(e.target.value)} required />
           </label>
           <label>
             Password
-            <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required />
+            <input type="password" placeholder="••••••••" value={password} onChange={(e) => setPassword(e.target.value)} required />
           </label>
           {error && <div className="error-notice">{error}</div>}
           <button type="submit">{isSignup ? "Sign Up" : "Sign In"}</button>
@@ -172,6 +174,56 @@ function App() {
   const [drawdownSettings, setDrawdownSettings] = useState<Record<string, { enabled: boolean; rate: number; lumpSumTaken?: boolean }>>({});
   const [inflationRate, setInflationRate] = useState(3);
   const [additionalRetirementExpenses, setAdditionalRetirementExpenses] = useState<ExpenseLine[]>([]);
+  const [retirementTaxableFraction, setRetirementTaxableFraction] = useState(0.75);
+
+  const currentDataString = useMemo(() => JSON.stringify({
+    paye,
+    selfEmployment,
+    taxSettings,
+    budgetLines,
+    annualBills,
+    savings,
+    projectionYears,
+    mortgage,
+    birthYear,
+    birthMonth,
+    expectedOutgoings,
+    drawdownRate,
+    otherRetirementIncome,
+    drawdownSettings,
+    inflationRate,
+    additionalRetirementExpenses,
+    retirementTaxableFraction,
+  }), [
+    paye, selfEmployment, taxSettings, budgetLines, annualBills, savings,
+    projectionYears, mortgage, birthYear, birthMonth, expectedOutgoings,
+    drawdownRate, otherRetirementIncome, drawdownSettings, inflationRate,
+    additionalRetirementExpenses, retirementTaxableFraction
+  ]);
+
+  const [lastSavedData, setLastSavedData] = useState<string>(currentDataString);
+
+  const hasUnsavedChanges = useMemo(() => {
+    return lastSavedData !== currentDataString;
+  }, [lastSavedData, currentDataString]);
+
+  useEffect(() => {
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (hasUnsavedChanges) {
+        e.preventDefault();
+        e.returnValue = "You have unsaved changes. Are you sure you want to leave?";
+      }
+    };
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, [hasUnsavedChanges]);
+
+  const confirmUnsavedChanges = () => {
+    if (hasUnsavedChanges) {
+      return window.confirm("You have unsaved changes. Are you sure you want to proceed without saving?");
+    }
+    return true;
+  };
 
   const pensionAccessAge = useMemo(() => {
     // April 6, 1973 is the cut-off
@@ -207,6 +259,7 @@ function App() {
   }, [user]);
 
   const loadPlan = (plan: Plan) => {
+    if (!confirmUnsavedChanges()) return;
     setCurrentPlanId(plan.id);
     const d = plan.data;
     setPaye(d.paye);
@@ -225,6 +278,28 @@ function App() {
     setDrawdownSettings(d.drawdownSettings || {});
     setInflationRate(d.inflationRate ?? 3);
     setAdditionalRetirementExpenses(d.additionalRetirementExpenses || []);
+    setRetirementTaxableFraction(d.retirementTaxableFraction ?? 0.75);
+    
+    // Normalize and set lastSavedData
+    setLastSavedData(JSON.stringify({
+      paye: d.paye,
+      selfEmployment: d.selfEmployment,
+      taxSettings: d.taxSettings,
+      budgetLines: d.budgetLines,
+      annualBills: d.annualBills,
+      savings: d.savings,
+      projectionYears: d.projectionYears,
+      mortgage: d.mortgage,
+      birthYear: d.birthYear || 1990,
+      birthMonth: d.birthMonth || 1,
+      expectedOutgoings: d.expectedOutgoings || 0,
+      drawdownRate: d.drawdownRate || 4,
+      otherRetirementIncome: d.otherRetirementIncome || [],
+      drawdownSettings: d.drawdownSettings || {},
+      inflationRate: d.inflationRate ?? 3,
+      additionalRetirementExpenses: d.additionalRetirementExpenses || [],
+      retirementTaxableFraction: d.retirementTaxableFraction ?? 0.75,
+    }));
   };
 
   const handleSavePlan = async () => {
@@ -246,6 +321,7 @@ function App() {
       drawdownSettings,
       inflationRate,
       additionalRetirementExpenses,
+      retirementTaxableFraction,
     };
 
     if (currentPlanId) {
@@ -254,6 +330,7 @@ function App() {
         data: planData,
         updatedAt: serverTimestamp(),
       });
+      setLastSavedData(JSON.stringify(planData));
       alert("Plan saved successfully!");
     } else {
       const name = prompt("Enter a name for this plan:");
@@ -265,12 +342,14 @@ function App() {
         updatedAt: serverTimestamp(),
       });
       setCurrentPlanId(docRef.id);
+      setLastSavedData(JSON.stringify(planData));
       fetchPlans();
       alert("New plan created and saved!");
     }
   };
 
   const createNewPlan = () => {
+    if (!confirmUnsavedChanges()) return;
     setCurrentPlanId(null);
     setPaye(initialPaye);
     setSelfEmployment(initialSelfEmployment);
@@ -299,7 +378,41 @@ function App() {
     setDrawdownSettings({});
     setInflationRate(3);
     setAdditionalRetirementExpenses([]);
-    };
+    setRetirementTaxableFraction(0.75);
+    
+    // Reset lastSavedData to the "new plan" state
+    const newDataString = JSON.stringify({
+      paye: initialPaye,
+      selfEmployment: initialSelfEmployment,
+      taxSettings: {
+        taxCode: "1257L",
+        region: "england-wales-ni",
+        sippNetContribution: 8506,
+      },
+      budgetLines: initialBudget,
+      annualBills: initialAnnualBills,
+      savings: initialSavings,
+      projectionYears: 10,
+      mortgage: {
+        amount: 0,
+        annualRate: 4,
+        years: 25,
+        monthlyOverpayment: 0,
+        oneOffMonth: 0,
+        oneOffAmount: 0,
+      },
+      birthYear: 1990,
+      birthMonth: 1,
+      expectedOutgoings: 0,
+      drawdownRate: 4,
+      otherRetirementIncome: [],
+      drawdownSettings: {},
+      inflationRate: 3,
+      additionalRetirementExpenses: [],
+      retirementTaxableFraction: 0.75,
+    });
+    setLastSavedData(newDataString);
+  };
 
   const handleDeletePlan = async () => {
     if (!currentPlanId || !window.confirm("Are you sure you want to delete this plan?")) return;
@@ -556,7 +669,7 @@ const projectionBuckets = useMemo(() => {
             <button onClick={handleSavePlan}>Save Plan</button>
             {currentPlanId && <button className="secondary" style={{ color: "#a7332f" }} onClick={handleDeletePlan}>Delete</button>}
           </div>
-          <button className="secondary" onClick={() => signOut(auth)}>Sign Out ({user.email})</button>
+          <button className="secondary" onClick={() => { if (confirmUnsavedChanges()) signOut(auth); }}>Sign Out ({user.email})</button>
         </div>
       </section>
 
@@ -667,6 +780,10 @@ const projectionBuckets = useMemo(() => {
           setAnnualBills={setAnnualBills}
           additionalExpenses={additionalRetirementExpenses}
           setAdditionalExpenses={setAdditionalRetirementExpenses}
+          taxableFraction={retirementTaxableFraction}
+          setTaxableFraction={setRetirementTaxableFraction}
+          taxSettings={taxSettings}
+          drawdownRate={drawdownRate}
           />
       ) : null}
 
@@ -685,8 +802,8 @@ function ProfileSection({ birthYear, setBirthYear, birthMonth, setBirthMonth }: 
     <section className="panel span-12">
       <h2>Profile</h2>
       <div className="settings-grid">
-        <label>Birth Year <input type="number" value={birthYear} onChange={e => setBirthYear(Number(e.target.value))} /></label>
-        <label>Birth Month (1-12) <input type="number" min="1" max="12" value={birthMonth} onChange={e => setBirthMonth(Number(e.target.value))} /></label>
+        <label>Birth Year <input type="number" placeholder="YYYY" value={birthYear || ""} onChange={e => setBirthYear(Number(e.target.value))} /></label>
+        <label>Birth Month (1-12) <input type="number" min="1" max="12" placeholder="MM" value={birthMonth || ""} onChange={e => setBirthMonth(Number(e.target.value))} /></label>
       </div>
     </section>
   );
@@ -717,7 +834,11 @@ function RetirementSection({
   annualBills, 
   setAnnualBills, 
   additionalExpenses, 
-  setAdditionalExpenses 
+  setAdditionalExpenses,
+  taxableFraction,
+  setTaxableFraction,
+  taxSettings,
+  drawdownRate,
 }: {
   birthYear: number;
   setBirthYear: (y: number) => void;
@@ -744,17 +865,76 @@ function RetirementSection({
   setAnnualBills: React.Dispatch<React.SetStateAction<ExpenseLine[]>>;
   additionalExpenses: ExpenseLine[];
   setAdditionalExpenses: React.Dispatch<React.SetStateAction<ExpenseLine[]>>;
+  taxableFraction: number;
+  setTaxableFraction: (f: number) => void;
+  taxSettings: TaxSettings;
+  drawdownRate: number;
 }) {
   const hasActiveLisa = projectedSavings.some((b: any) => b.type === 'lisa' && (drawdownSettings[b.id]?.enabled ?? true));
+
+  const targetGrossSummary = useMemo(() => {
+    // 1. Calculate Nominal Other Income Net
+    let otherTaxable = 0;
+    let otherGross = 0;
+    otherIncome.forEach(item => {
+      otherGross += item.amount * 12;
+      if (item.isTaxable) otherTaxable += item.amount * 12;
+    });
+    
+    const otherTax = calculateIncomeTax(otherTaxable, taxSettings.taxCode, 0, taxSettings.region).totalTax;
+    const otherNet = otherGross - otherTax;
+    
+    // 2. Calculate the Gap to fund from pots
+    const totalTargetNet = summary.futureMonthlyExpenses * 12;
+    const netGap = Math.max(0, totalTargetNet - otherNet);
+    
+    const res = calculateRetirementGrossRequired(
+      netGap,
+      taxableFraction,
+      taxSettings.taxCode,
+      taxSettings.region,
+      otherTaxable
+    );
+    
+    // Calculate required pots based on drawdownRate
+    const rateDecimal = drawdownRate / 100;
+    const requiredPensionPot = res.grossPension / rateDecimal;
+    const requiredIsaPot = res.netFromNonTaxable / rateDecimal;
+    
+    return { ...res, requiredPensionPot, requiredIsaPot, otherNet, otherGross, otherTax, netGap, totalTargetNet };
+  }, [summary.futureMonthlyExpenses, taxableFraction, taxSettings, drawdownRate, otherIncome]);
+
+  const actualProjectedTotals = useMemo(() => {
+    let hasLisaPenalty = false;
+    const totals = projectedSavings.reduce((acc, bucket) => {
+      let val = bucket.projected;
+      if (bucket.type === 'lisa' && retirementAge < 60) {
+        val = val * 0.75;
+        hasLisaPenalty = true;
+      }
+
+      if (['pension', 'workplace-private-pension', 'nhs-pension', 'civil-service-pension', 'teachers-pension'].includes(bucket.type)) {
+        acc.pension += val;
+      } else if (['isa', 'lisa', 'cash'].includes(bucket.type)) {
+        acc.isaCash += val;
+      }
+      return acc;
+    }, { pension: 0, isaCash: 0 });
+    
+    return { ...totals, hasLisaPenalty };
+  }, [projectedSavings, retirementAge]);
+
+  const pensionSurplus = actualProjectedTotals.pension - targetGrossSummary.requiredPensionPot;
+  const isaSurplus = actualProjectedTotals.isaCash - targetGrossSummary.requiredIsaPot;
 
   return (
     <div className="workspace">
       <section className="panel span-12">
         <h2>Retirement Settings</h2>
         <div className="settings-grid">
-          <label>Target Retirement Age <input type="number" value={Math.round(retirementAge)} onChange={e => setRetirementAge(Number(e.target.value))} /></label>
+          <label>Target Retirement Age <input type="number" placeholder="67" value={Math.round(retirementAge) || ""} onChange={e => setRetirementAge(Number(e.target.value))} /></label>
           <label>Assumed Annual Inflation % 
-            <NumberInput value={inflationRate} onChange={setInflationRate} suffix="%" />
+            <NumberInput placeholder="3" value={inflationRate} onChange={setInflationRate} suffix="%" />
           </label>
         </div>
       </section>
@@ -805,10 +985,10 @@ function RetirementSection({
             <div key={item.id} style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '8px 0', borderBottom: '1px solid #f9f9f9' }}>
                <input type="checkbox" checked readOnly style={{ opacity: 0.5 }} />
                <div style={{ flex: 1 }}>
-                 <TextInput value={item.label} onChange={(l) => setAdditionalExpenses(updateItem(additionalExpenses, item.id, { label: l }))} />
+                 <TextInput placeholder="e.g. Travel" value={item.label} onChange={(l) => setAdditionalExpenses(updateItem(additionalExpenses, item.id, { label: l }))} />
                </div>
                <div style={{ width: '100px' }}>
-                 <NumberInput value={item.amount} onChange={(a) => setAdditionalExpenses(updateItem(additionalExpenses, item.id, { amount: a }))} />
+                 <NumberInput placeholder="0" value={item.amount} onChange={(a) => setAdditionalExpenses(updateItem(additionalExpenses, item.id, { amount: a }))} />
                </div>
                <button className="delete-btn" onClick={() => setAdditionalExpenses(additionalExpenses.filter((i: any) => i.id !== item.id))}>×</button>
             </div>
@@ -820,6 +1000,80 @@ function RetirementSection({
              ["Total Selected (Today's Money)", summary.currentMonthlyExpenses],
              [`Adjusted for Inflation (${projectionYears} yrs)`, summary.futureMonthlyExpenses],
            ]} />
+           
+           <div style={{ marginTop: '16px', paddingTop: '16px', borderTop: '1px dashed #ccc' }}>
+              <div className="funding-split-container" style={{ display: 'flex', alignItems: 'center', gap: '20px', marginBottom: '16px', flexWrap: 'wrap' }}>
+                <span style={{ fontSize: '0.85rem', color: '#666', fontWeight: 600, minWidth: '90px' }}>Funding Split:</span>
+                <div style={{ flex: '1 1 300px', display: 'flex', alignItems: 'center', gap: '12px' }}>
+                  <div style={{ flex: 1, position: 'relative' }}>
+                    <input 
+                      type="range" min="0" max="1" step="0.01" 
+                      className="split-slider"
+                      value={taxableFraction} 
+                      onChange={e => setTaxableFraction(Number(e.target.value))}
+                      style={{ '--split-percent': `${taxableFraction * 100}%` } as any}
+                    />
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.65rem', fontWeight: 800, marginTop: '4px' }}>
+                      <span className="pension-text">PENSION (TAXABLE)</span>
+                      <span className="isa-text">ISA / CASH (TAX FREE)</span>
+                    </div>
+                  </div>
+                  <div style={{ width: '80px' }}>
+                    <NumberInput 
+                      value={Math.round(taxableFraction * 100)} 
+                      onChange={(v) => setTaxableFraction(clampNumber(v, 0) / 100)} 
+                      suffix="%" 
+                    />
+                  </div>
+                </div>
+              </div>
+              
+              <div className="notice" style={{ maxWidth: 'none', fontSize: '0.75rem', marginBottom: '12px' }}>
+                Taxable portion assumes 25% tax-free (Pension rules). Non-taxable assumes 0% tax (ISA/Cash).
+              </div>
+
+              <ResultRows rows={[
+                ["Target Annual Net", targetGrossSummary.totalTargetNet],
+                ["Other Income Net", -targetGrossSummary.otherNet],
+                ["Net Gap to Fund", targetGrossSummary.netGap],
+                ["Required Annual Gross Withdrawal", targetGrossSummary.totalGrossAnnual],
+                ["Estimated Annual Tax on Pots", -targetGrossSummary.totalAnnualTaxOnPots],
+              ]} />
+              
+              <div style={{ marginTop: '12px', fontSize: '0.8rem', color: '#666' }}>
+                To fund the <strong>{money.format(targetGrossSummary.netGap)}</strong> gap at a <strong>{drawdownRate}%</strong> drawdown rate:
+              </div>
+
+              <div style={{ marginTop: '16px', paddingTop: '16px', borderTop: '1px dashed #ccc' }}>
+                <div className="retirement-comparison-grid">
+                  <div className={`metric pension-card ${pensionSurplus >= 0 ? 'green' : 'red'}`} style={{ minHeight: 'auto', padding: '12px' }}>
+                    <span style={{ fontSize: '0.75rem' }}>Projected Pension Pot</span>
+                    <strong style={{ fontSize: '1.2rem' }}>{money.format(actualProjectedTotals.pension)}</strong>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '4px' }}>
+                      <small style={{ fontSize: '0.65rem', color: '#666' }}>Target: {money.format(targetGrossSummary.requiredPensionPot)}</small>
+                      <small style={{ fontSize: '0.7rem', fontWeight: 800 }}>
+                        {pensionSurplus >= 0 ? '+' : ''}{money.format(pensionSurplus)}
+                      </small>
+                    </div>
+                  </div>
+                  <div className={`metric isa-card ${isaSurplus >= 0 ? 'green' : 'red'}`} style={{ minHeight: 'auto', padding: '12px' }}>
+                    <span style={{ fontSize: '0.75rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      Projected ISA/Cash Pot
+                      {actualProjectedTotals.hasLisaPenalty && (
+                        <small style={{ color: '#a7332f', fontWeight: 800, fontSize: '0.6rem' }}>LISA 25% PENALTY APPLIED</small>
+                      )}
+                    </span>
+                    <strong style={{ fontSize: '1.2rem' }}>{money.format(actualProjectedTotals.isaCash)}</strong>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '4px' }}>
+                      <small style={{ fontSize: '0.65rem', color: '#666' }}>Target: {money.format(targetGrossSummary.requiredIsaPot)}</small>
+                      <small style={{ fontSize: '0.7rem', fontWeight: 800 }}>
+                        {isaSurplus >= 0 ? '+' : ''}{money.format(isaSurplus)}
+                      </small>
+                    </div>
+                  </div>
+                </div>
+              </div>
+           </div>
         </div>
       </section>
 
@@ -828,7 +1082,7 @@ function RetirementSection({
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
             <span style={{ fontSize: '0.9rem', color: '#666' }}>Projection Period:</span>
             <div style={{ width: '100px' }}>
-              <NumberInput value={projectionYears} onChange={setProjectionYears} suffix="yrs" />
+              <NumberInput placeholder="10" value={projectionYears} onChange={setProjectionYears} suffix="yrs" />
             </div>
           </div>
         
@@ -882,6 +1136,7 @@ function RetirementSection({
                     <span style={{ fontSize: '0.8rem', color: '#2c5282' }}>Defined Benefit (Fixed)</span>
                   ) : (
                     <NumberInput 
+                      placeholder="4"
                       value={drawdownSettings[bucket.id]?.rate ?? 4} 
                       onChange={(rate) => {
                         const current = drawdownSettings[bucket.id] || { enabled: true, rate: 4 };
@@ -912,8 +1167,8 @@ function RetirementSection({
           </div>
           {otherIncome.map((item: any) => (
             <div key={item.id} className="budget-row">
-              <div><div className="mobile-label">Source</div><TextInput value={item.label} onChange={(l) => setOtherIncome(updateItem<any>(otherIncome, item.id, { label: l }))} /></div>
-              <div><div className="mobile-label">Amount</div><NumberInput value={item.amount} onChange={(a) => setOtherIncome(updateItem<any>(otherIncome, item.id, { amount: a }))} /></div>
+              <div><div className="mobile-label">Source</div><TextInput placeholder="e.g. Rental Income" value={item.label} onChange={(l) => setOtherIncome(updateItem<any>(otherIncome, item.id, { label: l }))} /></div>
+              <div><div className="mobile-label">Amount</div><NumberInput placeholder="0" value={item.amount} onChange={(a) => setOtherIncome(updateItem<any>(otherIncome, item.id, { amount: a }))} /></div>
               <div>
                 <div className="mobile-label">Taxable?</div>
                 <input 
@@ -1078,8 +1333,8 @@ function IncomeSection({
           </div>
           {paye.map((income) => (
             <div className="table-row" key={income.id}>
-              <div><div className="mobile-label">Source</div><TextInput value={income.label} onChange={(label) => setPaye(updateItem(paye, income.id, { label }))} /></div>
-              <div><div className="mobile-label">Gross</div><NumberInput value={income.gross} onChange={(gross) => {
+              <div><div className="mobile-label">Source</div><TextInput placeholder="e.g. Main Job" value={income.label} onChange={(label) => setPaye(updateItem(paye, income.id, { label }))} /></div>
+              <div><div className="mobile-label">Gross</div><NumberInput placeholder="0" value={income.gross} onChange={(gross) => {
                 const patch: any = { gross };
                 if (income.pensionType === 'nhs') {
                    patch.pensionRate = calculateNhsEmployeeRate(gross);
@@ -1112,9 +1367,9 @@ function IncomeSection({
                 </select>
 
               </div>
-              <div><div className="mobile-label">Employee Pension %</div><NumberInput value={income.pensionRate} onChange={(pensionRate) => setPaye(updateItem(paye, income.id, { pensionRate }))} suffix="%" /></div>
-              <div><div className="mobile-label">Employer Pension</div><NumberInput value={income.employerPensionContribution} onChange={(employerPensionContribution) => setPaye(updateItem(paye, income.id, { employerPensionContribution }))} /></div>
-              <div><div className="mobile-label">Tax Paid</div><NumberInput value={income.taxPaid} onChange={(taxPaid) => setPaye(updateItem(paye, income.id, { taxPaid }))} /></div>
+              <div><div className="mobile-label">Employee Pension %</div><NumberInput placeholder="0" value={income.pensionRate} onChange={(pensionRate) => setPaye(updateItem(paye, income.id, { pensionRate }))} suffix="%" /></div>
+              <div><div className="mobile-label">Employer Pension</div><NumberInput placeholder="0" value={income.employerPensionContribution} onChange={(employerPensionContribution) => setPaye(updateItem(paye, income.id, { employerPensionContribution }))} /></div>
+              <div><div className="mobile-label">Tax Paid</div><NumberInput placeholder="0" value={income.taxPaid} onChange={(taxPaid) => setPaye(updateItem(paye, income.id, { taxPaid }))} /></div>
               <button className="delete-btn" onClick={() => setPaye(paye.filter((i: any) => i.id !== income.id))}>×</button>
             </div>
           ))}
@@ -1132,7 +1387,7 @@ function IncomeSection({
           {nhsBucket ? (
             <div className="settings-grid">
               <label>Total Years of Service (to date) 
-                <NumberInput value={nhsBucket.nhsYearsService || 0} onChange={(val) => setSavings(updateItem(savings, nhsBucket.id, { nhsYearsService: val }))} />
+                <NumberInput placeholder="0" value={nhsBucket.nhsYearsService || 0} onChange={(val) => setSavings(updateItem(savings, nhsBucket.id, { nhsYearsService: val }))} />
               </label>
               <label>Pension Scheme
                 <select value={nhsBucket.nhsScheme || "2015"} onChange={(e) => setSavings(updateItem(savings, nhsBucket.id, { nhsScheme: e.target.value as any }))}>
@@ -1163,7 +1418,7 @@ function IncomeSection({
           {civilServiceBucket ? (
             <div className="settings-grid">
               <label>Total Years of Service (to date) 
-                <NumberInput value={civilServiceBucket.dbYearsService || 0} onChange={(val) => setSavings(updateItem(savings, civilServiceBucket.id, { dbYearsService: val }))} />
+                <NumberInput placeholder="0" value={civilServiceBucket.dbYearsService || 0} onChange={(val) => setSavings(updateItem(savings, civilServiceBucket.id, { dbYearsService: val }))} />
               </label>
               <label>Pension Scheme
                 <select value={civilServiceBucket.dbScheme || "alpha"} onChange={(e) => setSavings(updateItem(savings, civilServiceBucket.id, { dbScheme: e.target.value as any }))}>
@@ -1194,7 +1449,7 @@ function IncomeSection({
           {teachersBucket ? (
             <div className="settings-grid">
               <label>Total Years of Service (to date) 
-                <NumberInput value={teachersBucket.dbYearsService || 0} onChange={(val) => setSavings(updateItem(savings, teachersBucket.id, { dbYearsService: val }))} />
+                <NumberInput placeholder="0" value={teachersBucket.dbYearsService || 0} onChange={(val) => setSavings(updateItem(savings, teachersBucket.id, { dbYearsService: val }))} />
               </label>
               <label>Pension Scheme
                 <select value={teachersBucket.dbScheme || "2015"} onChange={(e) => setSavings(updateItem(savings, teachersBucket.id, { dbScheme: e.target.value as any }))}>
@@ -1226,12 +1481,12 @@ function IncomeSection({
             return (
               <article className="mini-panel" key={stream.id}>
                 <div className="split-title">
-                  <TextInput value={stream.label} onChange={(label) => setSelfEmployment(updateItem(selfEmployment, stream.id, { label }))} />
+                  <TextInput placeholder="e.g. Freelancing" value={stream.label} onChange={(label) => setSelfEmployment(updateItem(selfEmployment, stream.id, { label }))} />
                   <button className="delete-btn" onClick={() => setSelfEmployment(selfEmployment.filter((s: any) => s.id !== stream.id))}>×</button>
                 </div>
                 <label>
                   Gross income
-                  <NumberInput value={stream.gross} onChange={(gross) => setSelfEmployment(updateItem(selfEmployment, stream.id, { gross }))} />
+                  <NumberInput placeholder="0" value={stream.gross} onChange={(gross) => setSelfEmployment(updateItem(selfEmployment, stream.id, { gross }))} />
                 </label>
                 <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.9rem', margin: '8px 0' }}>
                   <input 
@@ -1245,10 +1500,12 @@ function IncomeSection({
                   {stream.expenses.map((expense) => (
                     <div className="expense-row" key={expense.id}>
                       <TextInput
+                        placeholder="Expense label"
                         value={expense.label}
                         onChange={(label) => updateExpense(stream.id, expense.id, { label }, selfEmployment, setSelfEmployment)}
                       />
                       <NumberInput
+                        placeholder="0"
                         value={expense.amount}
                         onChange={(amount) => updateExpense(stream.id, expense.id, { amount }, selfEmployment, setSelfEmployment)}
                       />
@@ -1298,7 +1555,7 @@ function TaxSection({
         <div className="settings-grid">
           <label>
             Tax code
-            <input value={taxSettings.taxCode} onChange={(event) => setTaxSettings({ ...taxSettings, taxCode: event.target.value })} />
+            <input placeholder="1257L" value={taxSettings.taxCode} onChange={(event) => setTaxSettings({ ...taxSettings, taxCode: event.target.value })} />
           </label>
           <label>
             Region
@@ -1377,7 +1634,7 @@ function BudgetSection({
           </div>
           {budgetLines.map((line) => (
             <div className="budget-row" key={line.id}>
-              <div><div className="mobile-label">Label</div><TextInput value={line.label} onChange={(label) => setBudgetLines(updateItem(budgetLines, line.id, { label }))} /></div>
+              <div><div className="mobile-label">Label</div><TextInput placeholder="e.g. Rent" value={line.label} onChange={(label) => setBudgetLines(updateItem(budgetLines, line.id, { label }))} /></div>
               <div><div className="mobile-label">Category</div><select value={line.bucket} onChange={(event) => setBudgetLines(updateItem(budgetLines, line.id, { bucket: event.target.value as BudgetLine["bucket"] }))}>
                 <option value="living">Living</option>
                 <option value="housing">Housing</option>
@@ -1387,7 +1644,7 @@ function BudgetSection({
                 <option value="entertainment">Entertainment</option>
               </select></div>
 
-              <div><div className="mobile-label">Amount</div><NumberInput value={line.amount} onChange={(amount) => setBudgetLines(updateItem(budgetLines, line.id, { amount }))} /></div>
+              <div><div className="mobile-label">Amount</div><NumberInput placeholder="0" value={line.amount} onChange={(amount) => setBudgetLines(updateItem(budgetLines, line.id, { amount }))} /></div>
               <button className="delete-btn" onClick={() => setBudgetLines(budgetLines.filter((l: any) => l.id !== line.id))}>×</button>
             </div>
           ))}
@@ -1404,8 +1661,8 @@ function BudgetSection({
           </div>
           {annualBills.map((line) => (
             <div className="expense-row" key={line.id}>
-              <div><div className="mobile-label">Label</div><TextInput value={line.label} onChange={(label) => setAnnualBills(updateItem(annualBills, line.id, { label }))} /></div>
-              <div><div className="mobile-label">Amount</div><NumberInput value={line.amount} onChange={(amount) => setAnnualBills(updateItem(annualBills, line.id, { amount }))} /></div>
+              <div><div className="mobile-label">Label</div><TextInput placeholder="e.g. Car Insurance" value={line.label} onChange={(label) => setAnnualBills(updateItem(annualBills, line.id, { label }))} /></div>
+              <div><div className="mobile-label">Amount</div><NumberInput placeholder="0" value={line.amount} onChange={(amount) => setAnnualBills(updateItem(annualBills, line.id, { amount }))} /></div>
               <button className="delete-btn" onClick={() => setAnnualBills(annualBills.filter((l: any) => l.id !== line.id))}>×</button>
             </div>
           ))}
@@ -1483,7 +1740,7 @@ function SavingsSection({
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
             <span style={{ fontSize: '0.9rem', color: '#666' }}>Projection Period:</span>
             <div style={{ width: '100px' }}>
-              <NumberInput value={projectionYears} onChange={setProjectionYears} suffix="yrs" />
+              <NumberInput placeholder="10" value={projectionYears} onChange={setProjectionYears} suffix="yrs" />
             </div>
           </div>
         </div>
@@ -1550,7 +1807,7 @@ function SavingsSection({
                     checked={!bucket.isHidden}
                     onChange={() => setSavings(updateItem(savings, bucket.id, { isHidden: !bucket.isHidden }))}
                   /></div>
-                  <div><div className="mobile-label">Bucket Name</div><TextInput value={bucket.label} onChange={(label) => setSavings(updateItem(savings, bucket.id, { label }))} /></div>
+                  <div><div className="mobile-label">Bucket Name</div><TextInput placeholder="e.g. ISA" value={bucket.label} onChange={(label) => setSavings(updateItem(savings, bucket.id, { label }))} /></div>
                   <div><div className="mobile-label">Type</div>
                     <select value={bucket.type} onChange={(event) => setSavings(updateItem(savings, bucket.id, { type: event.target.value as SavingsBucket["type"] }))}>
                       <option value="cash">Cash</option>
@@ -1563,12 +1820,13 @@ function SavingsSection({
                       <option value="teachers-pension">Teachers' Pension</option>
                     </select>
                   </div>
-                  <div><div className="mobile-label">Balance</div><NumberInput value={bucket.balance} onChange={(balance) => setSavings(updateItem(savings, bucket.id, { balance }))} /></div>
+                  <div><div className="mobile-label">Balance</div><NumberInput placeholder="0" value={bucket.balance} onChange={(balance) => setSavings(updateItem(savings, bucket.id, { balance }))} /></div>
                   <div><div className="mobile-label">Monthly</div><NumberInput 
+                    placeholder="0"
                     value={parseFloat(bucket.monthly.toFixed(2))} 
                     onChange={(monthly) => setSavings(updateItem(savings, bucket.id, { monthly }))} 
                   /></div>
-                  <div><div className="mobile-label">Growth Rate</div><NumberInput value={bucket.annualRate} onChange={(annualRate) => setSavings(updateItem(savings, bucket.id, { annualRate }))} suffix="%" /></div>
+                  <div><div className="mobile-label">Growth Rate</div><NumberInput placeholder="0" value={bucket.annualRate} onChange={(annualRate) => setSavings(updateItem(savings, bucket.id, { annualRate }))} suffix="%" /></div>
                   <button className="delete-btn" onClick={() => setSavings(savings.filter((s: any) => s.id !== bucket.id))}>×</button>
                 </div>
 
@@ -1577,8 +1835,8 @@ function SavingsSection({
                   <div style={{ gridColumn: '1 / -1', background: '#f8fbfd', padding: '16px', borderBottom: '1px solid #e2e8f0' }}>
                     <h4 style={{ margin: '0 0 12px 0', fontSize: '0.8rem', color: '#2c5282', letterSpacing: '0.05em' }}>PENSION CONFIGURATION</h4>
                     <div className="settings-grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))' }}>
-                      <label>Annual Salary <NumberInput value={bucket.dbSalary || bucket.nhsSalary || 0} onChange={(val) => setSavings(updateItem(savings, bucket.id, { dbSalary: val }))} /></label>
-                      <label>Service Years <NumberInput value={bucket.dbYearsService || bucket.nhsYearsService || 0} onChange={(val) => setSavings(updateItem(savings, bucket.id, { dbYearsService: val }))} /></label>
+                      <label>Annual Salary <NumberInput placeholder="0" value={bucket.dbSalary || bucket.nhsSalary || 0} onChange={(val) => setSavings(updateItem(savings, bucket.id, { dbSalary: val }))} /></label>
+                      <label>Service Years <NumberInput placeholder="0" value={bucket.dbYearsService || bucket.nhsYearsService || 0} onChange={(val) => setSavings(updateItem(savings, bucket.id, { dbYearsService: val }))} /></label>
                       <label>Scheme
                         <select style={{ width: '100%', marginTop: '4px' }} value={bucket.dbScheme || bucket.nhsScheme || "2015"} onChange={(e) => setSavings(updateItem(savings, bucket.id, { dbScheme: e.target.value as any }))}>
                           {bucket.type === 'nhs-pension' && (
@@ -1663,12 +1921,12 @@ function MortgageSection({
     <section className="panel span-12 mortgage-panel">
       <h2>Mortgage Estimator</h2>
       <div className="mortgage-grid">
-        <label>Mortgage amount <NumberInput value={mortgage.amount} onChange={(amount) => setMortgage({ ...mortgage, amount })} /></label>
-        <label>Annual rate % <NumberInput value={mortgage.annualRate} onChange={(annualRate) => setMortgage({ ...mortgage, annualRate })} /></label>
-        <label>Term years <NumberInput value={mortgage.years} onChange={(years) => setMortgage({ ...mortgage, years })} /></label>
-        <label>Monthly overpayment <NumberInput value={mortgage.monthlyOverpayment} onChange={(monthlyOverpayment) => setMortgage({ ...mortgage, monthlyOverpayment })} /></label>
-        <label>One-off month <NumberInput value={mortgage.oneOffMonth} onChange={(oneOffMonth) => setMortgage({ ...mortgage, oneOffMonth })} /></label>
-        <label>One-off amount <NumberInput value={mortgage.oneOffAmount} onChange={(oneOffAmount) => setMortgage({ ...mortgage, oneOffAmount })} /></label>
+        <label>Mortgage amount <NumberInput placeholder="0" value={mortgage.amount} onChange={(amount) => setMortgage({ ...mortgage, amount })} /></label>
+        <label>Annual rate % <NumberInput placeholder="0" value={mortgage.annualRate} onChange={(annualRate) => setMortgage({ ...mortgage, annualRate })} /></label>
+        <label>Term years <NumberInput placeholder="0" value={mortgage.years} onChange={(years) => setMortgage({ ...mortgage, years })} /></label>
+        <label>Monthly overpayment <NumberInput placeholder="0" value={mortgage.monthlyOverpayment} onChange={(monthlyOverpayment) => setMortgage({ ...mortgage, monthlyOverpayment })} /></label>
+        <label>One-off month <NumberInput placeholder="0" value={mortgage.oneOffMonth} onChange={(oneOffMonth) => setMortgage({ ...mortgage, oneOffMonth })} /></label>
+        <label>One-off amount <NumberInput placeholder="0" value={mortgage.oneOffAmount} onChange={(oneOffAmount) => setMortgage({ ...mortgage, oneOffAmount })} /></label>
       </div>
       <section className="summary-grid tight">
         <Metric label="Standard payment" value={monthlyMoney.format(mortgageSummary.standardPayment)} />
@@ -1698,17 +1956,18 @@ function PanelHeader({ title, actionLabel, onAction }: { title: string; actionLa
   );
 }
 
-function TextInput({ value, onChange }: { value: string; onChange: (value: string) => void }) {
-  return <input value={value} onChange={(event) => onChange(event.target.value)} />;
+function TextInput({ value, onChange, placeholder }: { value: string; onChange: (value: string) => void; placeholder?: string }) {
+  return <input placeholder={placeholder} value={value} onChange={(event) => onChange(event.target.value)} />;
 }
 
-function NumberInput({ value, onChange, suffix }: { value: number; onChange: (value: number) => void; suffix?: string }) {
+function NumberInput({ value, onChange, suffix, placeholder }: { value: number; onChange: (value: number) => void; suffix?: string; placeholder?: string }) {
   return (
     <span className="number-field">
       <input
         type="number"
-        value={Number.isFinite(value) ? value : 0}
-        onChange={(event) => onChange(Number(event.target.value))}
+        placeholder={placeholder}
+        value={value === 0 ? "" : value}
+        onChange={(event) => onChange(event.target.value === "" ? 0 : Number(event.target.value))}
       />
       {suffix ? <span>{suffix}</span> : null}
     </span>
