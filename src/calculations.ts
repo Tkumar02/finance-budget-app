@@ -15,6 +15,7 @@ export type ExpenseLine = {
   label: string;
   amount: number;
   includeInRetirement?: boolean;
+  bucket: "living" | "housing" | "debt" | "saving" | "tax" | "food" | "entertainment" | "professional";
 };
 
 export type SelfEmployment = {

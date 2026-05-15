@@ -46,7 +46,7 @@ import {
 } from "./calculations";
 import "./styles.css";
 
-type SectionId = "overview" | "income" | "tax" | "budget" | "savings" | "mortgage" | "retirement" | "profile";
+type SectionId = "overview" | "income" | "tax" | "budget" | "savings" | "mortgage" | "retirement" | "profile" | "settings";
 
 type Plan = {
   id: string;
@@ -633,12 +633,10 @@ const projectionBuckets = useMemo(() => {
   const sections = [
     { id: "overview", title: "Overview", value: monthlyMoney.format(overviewBudget.monthlySurplus), detail: "monthly surplus" },
     { id: "income", title: "Income", value: money.format(tax.payeGross + tax.selfProfit), detail: "gross + profit" },
-    { id: "tax", title: "Tax", value: monthlyMoney.format(tax.selfAssessmentDue / 12), detail: "monthly set-aside" },
     { id: "budget", title: "Budget", value: monthlyMoney.format(overviewBudget.monthlyOut), detail: "monthly outflow" },
-    { id: "savings", title: "Savings", value: money.format(projectedTotal), detail: `${projectionYears} year projection` },
+    { id: "savings", title: "Savings", value: money.format(projectedTotal), detail: `${projectionYears.toFixed(2)} year projection` },
     { id: "mortgage", title: "Mortgage", value: `${mortgageSummary.payoffYears.toFixed(1)} yrs`, detail: "payoff estimate" },
     { id: "retirement", title: "Retirement", value: monthlyMoney.format(retirementSummary.monthlyIn), detail: "post-work income" },
-    { id: "profile", title: "Profile", value: `${birthYear}/${birthMonth}`, detail: "personal details" },
   ] satisfies { id: SectionId; title: string; value: string; detail: string }[];
 
   if (authLoading) return <div className="loading-screen">Loading application...</div>;
@@ -647,52 +645,82 @@ const projectionBuckets = useMemo(() => {
   return (
     <main className="app-shell">
       <section className="topbar">
-        <div>
-          <p className="eyebrow">2026-2027 UK planning estimator</p>
-          <h1>Income Plan</h1>
+        <div className="topbar-row main-header">
+          <div className="brand">
+            <p className="eyebrow">Planning Estimator</p>
+            <h1>Income Plan</h1>
+          </div>
+          
+          <div className="sys-actions">
+            <button 
+              className={`icon-btn ${activeSection === 'settings' ? 'active' : 'secondary'}`} 
+              onClick={() => setActiveSection(activeSection === 'settings' ? 'overview' : 'settings')}
+              title="Settings"
+            >
+              ⚙️
+            </button>
+            <button className="secondary logout-btn" onClick={() => { if (confirmUnsavedChanges()) signOut(auth); }}>
+              <span>Sign Out </span>
+              <span className="user-email">({user.email})</span>
+            </button>
+          </div>
         </div>
-        <div className="plan-actions">
-          <div className="plan-selector">
+        
+        <div className="topbar-row plan-actions-row">
+          <div className="plan-management">
             <select
+              className="plan-selector-compact"
               value={currentPlanId || ""}
               onChange={(e) => {
                 const plan = plans.find((p) => p.id === e.target.value);
                 if (plan) loadPlan(plan);
               }}
             >
-              <option value="" disabled>Select a plan...</option>
+              <option value="" disabled>Select Plan...</option>
               {plans.map((p) => (
                 <option key={p.id} value={p.id}>{p.name}</option>
               ))}
             </select>
-            <button className="secondary" onClick={createNewPlan}>New Plan</button>
-            <button onClick={handleSavePlan}>Save Plan</button>
-            {currentPlanId && <button className="secondary" style={{ color: "#a7332f" }} onClick={handleDeletePlan}>Delete</button>}
+            
+            <div className="button-group">
+              <button className="icon-btn" onClick={handleSavePlan} title="Save Plan">💾</button>
+              <button className="icon-btn secondary" onClick={createNewPlan} title="New Plan">➕</button>
+              {currentPlanId && <button className="icon-btn secondary danger" onClick={handleDeletePlan} title="Delete Plan">🗑️</button>}
+            </div>
           </div>
-          <button className="secondary" onClick={() => { if (confirmUnsavedChanges()) signOut(auth); }}>Sign Out ({user.email})</button>
         </div>
       </section>
 
-      <section className="summary-grid">
+      <section className={`summary-grid ${activeSection !== "overview" ? "focus-mode" : ""}`}>
         <Metric label="Annual net estimate" value={money.format(tax.netAnnual)} tone="green" />
         <Metric label="Monthly net estimate" value={monthlyMoney.format(tax.monthlyNet)} />
         <Metric label="Monthly expenses" value={monthlyMoney.format(budget.monthlyExpenses)} tone="amber" />
         <Metric label="Monthly savings" value={monthlyMoney.format(budget.monthlySavings)} tone="green" />
       </section>
 
-      <nav className="section-cards" aria-label="Finance sections">
+      <nav className={`section-cards ${activeSection !== "overview" ? "focus-mode" : ""}`} aria-label="Finance sections">
         {sections.map((section) => (
-          <button
-            className={activeSection === section.id ? "section-card active" : "section-card"}
-            key={section.id}
-            onClick={() => setActiveSection(section.id)}
-          >
-            <span>{section.title}</span>
-            <strong>{section.value}</strong>
-            <small>{section.detail}</small>
-          </button>
-        ))}
+            <button
+              className={activeSection === section.id ? "section-card active" : "section-card"}
+              key={section.id}
+              data-id={section.id}
+              onClick={() => setActiveSection(section.id as SectionId)}
+            >
+              <span>{section.title}</span>
+              <strong>{section.value}</strong>
+              <small>{section.detail}</small>
+            </button>
+          ))}
       </nav>
+
+      {activeSection === "settings" ? (
+        <SettingsSection 
+          taxSettings={taxSettings} setTaxSettings={setTaxSettings}
+          birthYear={birthYear} setBirthYear={setBirthYear}
+          birthMonth={birthMonth} setBirthMonth={setBirthMonth}
+          tax={tax}
+        />
+      ) : null}
 
       {activeSection === "overview" ? (
         <OverviewSection
@@ -711,14 +739,6 @@ const projectionBuckets = useMemo(() => {
           selfEmployment={selfEmployment} setSelfEmployment={setSelfEmployment}
           savings={savings} setSavings={setSavings}
         />
-      ) : null}
-
-      {activeSection === "tax" ? (
-        <TaxSection 
-          tax={tax} 
-          taxSettings={taxSettings} 
-          setTaxSettings={setTaxSettings} 
-          totalSippNet={totalSippNet}/>
       ) : null}
 
       {activeSection === "budget" ? (
@@ -787,25 +807,7 @@ const projectionBuckets = useMemo(() => {
           />
       ) : null}
 
-      {activeSection === "profile" ? (
-        <ProfileSection 
-          birthYear={birthYear} setBirthYear={setBirthYear} 
-          birthMonth={birthMonth} setBirthMonth={setBirthMonth} 
-        />
-      ) : null}
     </main>
-  );
-}
-
-function ProfileSection({ birthYear, setBirthYear, birthMonth, setBirthMonth }: any) {
-  return (
-    <section className="panel span-12">
-      <h2>Profile</h2>
-      <div className="settings-grid">
-        <label>Birth Year <input type="number" placeholder="YYYY" value={birthYear || ""} onChange={e => setBirthYear(Number(e.target.value))} /></label>
-        <label>Birth Month (1-12) <input type="number" min="1" max="12" placeholder="MM" value={birthMonth || ""} onChange={e => setBirthMonth(Number(e.target.value))} /></label>
-      </div>
-    </section>
   );
 }
 
@@ -940,247 +942,265 @@ function RetirementSection({
       </section>
 
       <section className="panel span-12">
-        <h2>Expected Retirement Expenses (Today's Money)</h2>
-        <div className="notice" style={{ marginBottom: '16px' }}>
-          Select which current expenses and annual bills will continue into retirement.
-        </div>
-        
-        <div className="budget-lines" style={{ maxHeight: '400px', overflowY: 'auto', border: '1px solid #eee', padding: '12px', borderRadius: '8px' }}>
-          <h4 style={{ margin: '0 0 10px 0', fontSize: '0.8rem', color: '#666' }}>MONTHLY EXPENSES</h4>
-          {budgetLines.map((line: any) => (
-            <div key={line.id} style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '8px 0', borderBottom: '1px solid #f9f9f9' }}>
-               <input 
-                 type="checkbox" 
-                 checked={line.includeInRetirement ?? true} 
-                 onChange={(e) => setBudgetLines(updateItem(budgetLines, line.id, { includeInRetirement: e.target.checked }))} 
-               />
-               <span style={{ flex: 1 }}>{line.label} <small style={{ color: '#888' }}>({line.bucket})</small></span>
-               <strong style={{ minWidth: '80px', textAlign: 'right' }}>{monthlyMoney.format(line.amount)}</strong>
+        <details className="disclosure-section" open>
+          <summary><h2>Retirement Funding Analysis</h2></summary>
+          <div className="disclosure-content">
+            <div className="notice" style={{ marginBottom: '16px' }}>
+              Select which current expenses and annual bills will continue into retirement.
             </div>
-          ))}
-
-          <h4 style={{ margin: '20px 0 10px 0', fontSize: '0.8rem', color: '#666' }}>ANNUAL BILLS</h4>
-          {annualBills.map((bill: any) => (
-            <div key={bill.id} style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '8px 0', borderBottom: '1px solid #f9f9f9' }}>
-               <input 
-                 type="checkbox" 
-                 checked={bill.includeInRetirement ?? true} 
-                 onChange={(e) => setAnnualBills(updateItem(annualBills, bill.id, { includeInRetirement: e.target.checked }))} 
-               />
-               <span style={{ flex: 1 }}>{bill.label}</span>
-               <strong style={{ minWidth: '80px', textAlign: 'right' }}>{monthlyMoney.format(bill.amount / 12)} <small style={{ fontWeight: 400, color: '#888' }}>/mo</small></strong>
-            </div>
-          ))}
-
-          <h4 style={{ margin: '20px 0 10px 0', fontSize: '0.8rem', color: '#24594f', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            ADDITIONAL RETIREMENT COSTS
-            <button 
-              onClick={() => setAdditionalExpenses([...additionalExpenses, { id: uid(), label: "New Future Cost", amount: 0 }])}
-              style={{ fontSize: '0.7rem', height: '24px', minHeight: 'auto', padding: '0 8px' }}
-            >
-              + Add
-            </button>
-          </h4>
-          {additionalExpenses.map((item: any) => (
-            <div key={item.id} style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '8px 0', borderBottom: '1px solid #f9f9f9' }}>
-               <input type="checkbox" checked readOnly style={{ opacity: 0.5 }} />
-               <div style={{ flex: 1 }}>
-                 <TextInput placeholder="e.g. Travel" value={item.label} onChange={(l) => setAdditionalExpenses(updateItem(additionalExpenses, item.id, { label: l }))} />
-               </div>
-               <div style={{ width: '100px' }}>
-                 <NumberInput placeholder="0" value={item.amount} onChange={(a) => setAdditionalExpenses(updateItem(additionalExpenses, item.id, { amount: a }))} />
-               </div>
-               <button className="delete-btn" onClick={() => setAdditionalExpenses(additionalExpenses.filter((i: any) => i.id !== item.id))}>×</button>
-            </div>
-          ))}
-        </div>
-
-        <div className="callout neutral" style={{ marginTop: '16px' }}>
-           <ResultRows rows={[
-             ["Total Selected (Today's Money)", summary.currentMonthlyExpenses],
-             [`Adjusted for Inflation (${projectionYears} yrs)`, summary.futureMonthlyExpenses],
-           ]} />
-           
-           <div style={{ marginTop: '16px', paddingTop: '16px', borderTop: '1px dashed #ccc' }}>
-              <div className="funding-split-container" style={{ display: 'flex', alignItems: 'center', gap: '20px', marginBottom: '16px', flexWrap: 'wrap' }}>
-                <span style={{ fontSize: '0.85rem', color: '#666', fontWeight: 600, minWidth: '90px' }}>Funding Split:</span>
-                <div style={{ flex: '1 1 300px', display: 'flex', alignItems: 'center', gap: '12px' }}>
-                  <div style={{ flex: 1, position: 'relative' }}>
-                    <input 
-                      type="range" min="0" max="1" step="0.01" 
-                      className="split-slider"
-                      value={taxableFraction} 
-                      onChange={e => setTaxableFraction(Number(e.target.value))}
-                      style={{ '--split-percent': `${taxableFraction * 100}%` } as any}
-                    />
-                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.65rem', fontWeight: 800, marginTop: '4px' }}>
-                      <span className="pension-text">PENSION (TAXABLE)</span>
-                      <span className="isa-text">ISA / CASH (TAX FREE)</span>
-                    </div>
-                  </div>
-                  <div style={{ width: '80px' }}>
-                    <NumberInput 
-                      value={Math.round(taxableFraction * 100)} 
-                      onChange={(v) => setTaxableFraction(clampNumber(v, 0) / 100)} 
-                      suffix="%" 
-                    />
-                  </div>
+            
+            <div className="budget-lines" style={{ maxHeight: '300px', overflowY: 'auto', border: '1px solid #eee', padding: '12px', borderRadius: '8px', marginBottom: '16px' }}>
+              <h4 style={{ margin: '0 0 10px 0', fontSize: '0.8rem', color: '#666' }}>MONTHLY EXPENSES</h4>
+              {budgetLines.map((line: any) => (
+                <div key={line.id} style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '8px 0', borderBottom: '1px solid #f9f9f9' }}>
+                  <input 
+                    type="checkbox" 
+                    checked={line.includeInRetirement ?? true} 
+                    onChange={(e) => setBudgetLines(updateItem(budgetLines, line.id, { includeInRetirement: e.target.checked }))} 
+                  />
+                  <span style={{ flex: 1 }}>{line.label} <small style={{ color: '#888' }}>({line.bucket})</small></span>
+                  <strong style={{ minWidth: '80px', textAlign: 'right' }}>{monthlyMoney.format(line.amount)}</strong>
                 </div>
-              </div>
-              
-              <div className="notice" style={{ maxWidth: 'none', fontSize: '0.75rem', marginBottom: '12px' }}>
-                Taxable portion assumes 25% tax-free (Pension rules). Non-taxable assumes 0% tax (ISA/Cash).
-              </div>
+              ))}
 
+              <h4 style={{ margin: '20px 0 10px 0', fontSize: '0.8rem', color: '#666' }}>ANNUAL BILLS</h4>
+              {annualBills.map((bill: any) => (
+                <div key={bill.id} style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '8px 0', borderBottom: '1px solid #f9f9f9' }}>
+                  <input 
+                    type="checkbox" 
+                    checked={bill.includeInRetirement ?? true} 
+                    onChange={(e) => setAnnualBills(updateItem(annualBills, bill.id, { includeInRetirement: e.target.checked }))} 
+                  />
+                  <span style={{ flex: 1 }}>{bill.label}</span>
+                  <strong style={{ minWidth: '80px', textAlign: 'right' }}>{monthlyMoney.format(bill.amount / 12)} <small style={{ fontWeight: 400, color: '#888' }}>/mo</small></strong>
+                </div>
+              ))}
+
+              <h4 style={{ margin: '20px 0 10px 0', fontSize: '0.8rem', color: '#24594f', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                ADDITIONAL RETIREMENT COSTS
+                <button 
+                  onClick={() => setAdditionalExpenses([...additionalExpenses, { id: uid(), label: "New Future Cost", amount: 0, bucket: 'living' }])}
+                  style={{ fontSize: '0.7rem', height: '24px', minHeight: 'auto', padding: '0 8px' }}
+                >
+                  + Add
+                </button>
+              </h4>
+              {additionalExpenses.map((item: any) => (
+                <div key={item.id} style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '8px 0', borderBottom: '1px solid #f9f9f9' }}>
+                  <input type="checkbox" checked readOnly style={{ opacity: 0.5 }} />
+                  <div style={{ flex: 1 }}>
+                    <TextInput placeholder="e.g. Travel" value={item.label} onChange={(l) => setAdditionalExpenses(updateItem(additionalExpenses, item.id, { label: l }))} />
+                  </div>
+                  <div style={{ width: '100px' }}>
+                    <NumberInput placeholder="0" value={item.amount} onChange={(a) => setAdditionalExpenses(updateItem(additionalExpenses, item.id, { amount: a }))} />
+                  </div>
+                  <button className="delete-btn" onClick={() => setAdditionalExpenses(additionalExpenses.filter((i: any) => i.id !== item.id))}>×</button>
+                </div>
+              ))}
+            </div>
+
+            <div className="callout neutral" style={{ marginTop: '16px' }}>
               <ResultRows rows={[
-                ["Target Annual Net", targetGrossSummary.totalTargetNet],
-                ["Other Income Net", -targetGrossSummary.otherNet],
-                ["Net Gap to Fund", targetGrossSummary.netGap],
-                ["Required Annual Gross Withdrawal", targetGrossSummary.totalGrossAnnual],
-                ["Estimated Annual Tax on Pots", -targetGrossSummary.totalAnnualTaxOnPots],
+                ["Total Selected (Today's Money)", summary.currentMonthlyExpenses],
+                [`Adjusted for Inflation (${projectionYears.toFixed(2)} yrs)`, summary.futureMonthlyExpenses],
               ]} />
               
-              <div style={{ marginTop: '12px', fontSize: '0.8rem', color: '#666' }}>
-                To fund the <strong>{money.format(targetGrossSummary.netGap)}</strong> gap at a <strong>{drawdownRate}%</strong> drawdown rate:
-              </div>
-
               <div style={{ marginTop: '16px', paddingTop: '16px', borderTop: '1px dashed #ccc' }}>
-                <div className="retirement-comparison-grid">
-                  <div className={`metric pension-card ${pensionSurplus >= 0 ? 'green' : 'red'}`} style={{ minHeight: 'auto', padding: '12px' }}>
-                    <span style={{ fontSize: '0.75rem' }}>Projected Pension Pot</span>
-                    <strong style={{ fontSize: '1.2rem' }}>{money.format(actualProjectedTotals.pension)}</strong>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '4px' }}>
-                      <small style={{ fontSize: '0.65rem', color: '#666' }}>Target: {money.format(targetGrossSummary.requiredPensionPot)}</small>
-                      <small style={{ fontSize: '0.7rem', fontWeight: 800 }}>
-                        {pensionSurplus >= 0 ? '+' : ''}{money.format(pensionSurplus)}
-                      </small>
+                  <div className="funding-split-container" style={{ display: 'flex', alignItems: 'center', gap: '20px', marginBottom: '16px', flexWrap: 'wrap' }}>
+                    <span style={{ fontSize: '0.85rem', color: '#666', fontWeight: 600, minWidth: '90px' }}>Funding Split:</span>
+                    <div style={{ flex: '1 1 300px', display: 'flex', alignItems: 'center', gap: '12px' }}>
+                      <div style={{ flex: 1, position: 'relative' }}>
+                        <input 
+                          type="range" min="0" max="1" step="0.01" 
+                          className="split-slider"
+                          value={taxableFraction} 
+                          onChange={e => setTaxableFraction(Number(e.target.value))}
+                          style={{ '--split-percent': `${taxableFraction * 100}%` } as any}
+                        />
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.65rem', fontWeight: 800, marginTop: '4px' }}>
+                          <span className="pension-text">PENSION (TAXABLE)</span>
+                          <span className="isa-text">ISA / CASH (TAX FREE)</span>
+                        </div>
+                      </div>
+                      <div style={{ width: '80px' }}>
+                        <NumberInput 
+                          value={Math.round(taxableFraction * 100)} 
+                          onChange={(v) => setTaxableFraction(clampNumber(v, 0) / 100)} 
+                          suffix="%" 
+                        />
+                      </div>
                     </div>
                   </div>
-                  <div className={`metric isa-card ${isaSurplus >= 0 ? 'green' : 'red'}`} style={{ minHeight: 'auto', padding: '12px' }}>
-                    <span style={{ fontSize: '0.75rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      Projected ISA/Cash Pot
-                      {actualProjectedTotals.hasLisaPenalty && (
-                        <small style={{ color: '#a7332f', fontWeight: 800, fontSize: '0.6rem' }}>LISA 25% PENALTY APPLIED</small>
+                  
+                  <div className="notice" style={{ maxWidth: 'none', fontSize: '0.75rem', marginBottom: '12px' }}>
+                    Taxable portion assumes 25% tax-free (Pension rules). Non-taxable assumes 0% tax (ISA/Cash).
+                  </div>
+
+                  <ResultRows rows={[
+                    ["Target Annual Net", targetGrossSummary.totalTargetNet],
+                    ["Other Income Net", -targetGrossSummary.otherNet],
+                    ["Net Gap to Fund", targetGrossSummary.netGap],
+                    ["Required Annual Gross Withdrawal", targetGrossSummary.totalGrossAnnual],
+                    ["Estimated Annual Tax on Pots", -targetGrossSummary.totalAnnualTaxOnPots],
+                  ]} />
+                  
+                  <div style={{ marginTop: '12px', fontSize: '0.8rem', color: '#666' }}>
+                    To fund the <strong>{money.format(targetGrossSummary.netGap)}</strong> gap at a <strong>{drawdownRate}%</strong> drawdown rate:
+                  </div>
+
+                  <div style={{ marginTop: '16px', paddingTop: '16px', borderTop: '1px dashed #ccc' }}>
+                    <div className="retirement-comparison-grid">
+                      <div className={`metric pension-card ${pensionSurplus >= 0 ? 'green' : 'red'}`} style={{ minHeight: 'auto', padding: '12px' }}>
+                        <span style={{ fontSize: '0.75rem' }}>Projected Pension Pot</span>
+                        <strong style={{ fontSize: '1.2rem' }}>{money.format(actualProjectedTotals.pension)}</strong>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '4px' }}>
+                          <small style={{ fontSize: '0.65rem', color: '#666' }}>Target: {money.format(targetGrossSummary.requiredPensionPot)}</small>
+                          <small style={{ fontSize: '0.7rem', fontWeight: 800 }}>
+                            {pensionSurplus >= 0 ? '+' : ''}{money.format(pensionSurplus)}
+                          </small>
+                        </div>
+                      </div>
+                      <div className={`metric isa-card ${isaSurplus >= 0 ? 'green' : 'red'}`} style={{ minHeight: 'auto', padding: '12px' }}>
+                        <span style={{ fontSize: '0.75rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          Projected ISA/Cash Pot
+                          {actualProjectedTotals.hasLisaPenalty && (
+                            <small style={{ color: '#a7332f', fontWeight: 800, fontSize: '0.6rem' }}>LISA 25% PENALTY APPLIED</small>
+                          )}
+                        </span>
+                        <strong style={{ fontSize: '1.2rem' }}>{money.format(actualProjectedTotals.isaCash)}</strong>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '4px' }}>
+                          <small style={{ fontSize: '0.65rem', color: '#666' }}>Target: {money.format(targetGrossSummary.requiredIsaPot)}</small>
+                          <small style={{ fontSize: '0.7rem', fontWeight: 800 }}>
+                            {isaSurplus >= 0 ? '+' : ''}{money.format(isaSurplus)}
+                          </small>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+              </div>
+            </div>
+          </div>
+        </details>
+      </section>
+
+      <section className="panel span-12">
+        <details className="disclosure-section">
+          <summary><h2>Drawdown Strategy & Pots</h2></summary>
+          <div className="disclosure-content">
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '20px' }}>
+              <span style={{ fontSize: '0.9rem', color: '#666' }}>Projection Period:</span>
+              <div style={{ width: '100px' }}>
+                <NumberInput placeholder="10" value={projectionYears} onChange={setProjectionYears} suffix="yrs" />
+              </div>
+            </div>
+          
+            <div className="table retirement-table">
+              <div className="table-row header">
+                <span>Include</span>
+                <span>Pot</span>
+                <span title="Tick if 25% tax-free lump sum already taken">Lump Sum?</span>
+                <span>Drawdown %</span>
+              </div>
+              {projectedSavings.map((bucket: any) => {
+                const accessible = isBucketAccessible(bucket.type, retirementAge);
+                const isPension = bucket.type === 'pension' || bucket.type === 'workplace-pension';
+                
+                return (
+                  <div className={`table-row ${!accessible ? "deselected" : ""}`} key={bucket.id}>
+                    <div>
+                      <div className="mobile-label">Include</div>
+                      <input
+                        type="checkbox"
+                        checked={drawdownSettings[bucket.id]?.enabled ?? true}
+                        onChange={() => {
+                          const current = drawdownSettings[bucket.id] || { enabled: true, rate: 4 };
+                          setDrawdownSettings({ ...drawdownSettings, [bucket.id]: { ...current, enabled: !current.enabled } });
+                        }}
+                      />
+                    </div>
+                    <div>
+                      <div className="mobile-label">Pot</div>
+                      <span>{bucket.label}</span>
+                      {!accessible && <small style={{ display: 'block', color: '#a7332f' }}>Locked until age {bucket.type === 'lisa' ? 60 : bucket.type === 'nhs-pension' ? 67 : pensionAccessAge}</small>}
+                    </div>
+                    <div>
+                      <div className="mobile-label">Lump Sum?</div>
+                      {isPension ? (
+                        <input
+                          type="checkbox"
+                          checked={drawdownSettings[bucket.id]?.lumpSumTaken ?? false}
+                          onChange={() => {
+                            const current = drawdownSettings[bucket.id] || { enabled: true, rate: 4 };
+                            setDrawdownSettings({ ...drawdownSettings, [bucket.id]: { ...current, lumpSumTaken: !current.lumpSumTaken } });
+                          }}
+                        />
+                      ) : (
+                        <span style={{ color: '#ccc', fontSize: '0.8rem' }}>N/A</span>
                       )}
-                    </span>
-                    <strong style={{ fontSize: '1.2rem' }}>{money.format(actualProjectedTotals.isaCash)}</strong>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '4px' }}>
-                      <small style={{ fontSize: '0.65rem', color: '#666' }}>Target: {money.format(targetGrossSummary.requiredIsaPot)}</small>
-                      <small style={{ fontSize: '0.7rem', fontWeight: 800 }}>
-                        {isaSurplus >= 0 ? '+' : ''}{money.format(isaSurplus)}
-                      </small>
+                    </div>
+                    <div>
+                      <div className="mobile-label">Rate %</div>
+                      {bucket.type === 'nhs-pension' ? (
+                        <span style={{ fontSize: '0.8rem', color: '#2c5282' }}>Defined Benefit (Fixed)</span>
+                      ) : (
+                        <NumberInput 
+                          placeholder="4"
+                          value={drawdownSettings[bucket.id]?.rate ?? 4} 
+                          onChange={(rate) => {
+                            const current = drawdownSettings[bucket.id] || { enabled: true, rate: 4 };
+                            setDrawdownSettings({ ...drawdownSettings, [bucket.id]: { ...current, rate } });
+                          }}
+                          suffix="%" 
+                        />
+                      )}
                     </div>
                   </div>
-                </div>
-              </div>
-           </div>
-        </div>
+                );
+              })}
+            </div>
+          </div>
+        </details>
       </section>
 
       <section className="panel span-12">
-        <h2>Drawdown Strategy</h2>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-            <span style={{ fontSize: '0.9rem', color: '#666' }}>Projection Period:</span>
-            <div style={{ width: '100px' }}>
-              <NumberInput placeholder="10" value={projectionYears} onChange={setProjectionYears} suffix="yrs" />
+        <details className="disclosure-section">
+          <summary>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
+              <h2>Other Income Sources</h2>
+              <button 
+                onClick={(e) => { e.stopPropagation(); setOtherIncome([...otherIncome, {id: uid(), label: "Other Income", amount: 0, isTaxable: true, bucket: 'living'}]) }}
+                style={{ fontSize: '0.7rem', height: '24px', minHeight: 'auto', padding: '0 8px' }}
+              >
+                + Add Source
+              </button>
+            </div>
+          </summary>
+          <div className="disclosure-content">
+            <div className="budget-lines">
+              <div className="budget-row header desktop-only">
+                <span>Source</span>
+                <span>Monthly Amount</span>
+                <span>Taxable?</span>
+                <span></span>
+              </div>
+              {otherIncome.map((item: any) => (
+                <div key={item.id} className="budget-row">
+                  <div><div className="mobile-label">Source</div><TextInput placeholder="e.g. Rental Income" value={item.label} onChange={(l) => setOtherIncome(updateItem<any>(otherIncome, item.id, { label: l }))} /></div>
+                  <div><div className="mobile-label">Amount</div><NumberInput placeholder="0" value={item.amount} onChange={(a) => setOtherIncome(updateItem<any>(otherIncome, item.id, { amount: a }))} /></div>
+                  <div>
+                    <div className="mobile-label">Taxable?</div>
+                    <input 
+                      type="checkbox" 
+                      checked={item.isTaxable ?? false} 
+                      onChange={(e) => setOtherIncome(updateItem<any>(otherIncome, item.id, { isTaxable: e.target.checked }))} 
+                    />
+                  </div>
+                  <button className="delete-btn" onClick={() => setOtherIncome(otherIncome.filter((i: any) => i.id !== item.id))}>×</button>
+                </div>
+              ))}
             </div>
           </div>
-        
-        <div className="table retirement-table">
-          <div className="table-row header">
-            <span>Include</span>
-            <span>Pot</span>
-            <span title="Tick if 25% tax-free lump sum already taken">Lump Sum?</span>
-            <span>Drawdown %</span>
-          </div>
-          {projectedSavings.map((bucket: any) => {
-            const accessible = isBucketAccessible(bucket.type, retirementAge);
-            const isPension = bucket.type === 'pension' || bucket.type === 'workplace-pension';
-            
-            return (
-              <div className={`table-row ${!accessible ? "deselected" : ""}`} key={bucket.id}>
-                <div>
-                  <div className="mobile-label">Include</div>
-                  <input
-                    type="checkbox"
-                    checked={drawdownSettings[bucket.id]?.enabled ?? true}
-                    onChange={() => {
-                      const current = drawdownSettings[bucket.id] || { enabled: true, rate: 4 };
-                      setDrawdownSettings({ ...drawdownSettings, [bucket.id]: { ...current, enabled: !current.enabled } });
-                    }}
-                  />
-                </div>
-                <div>
-                  <div className="mobile-label">Pot</div>
-                  <span>{bucket.label}</span>
-                  {!accessible && <small style={{ display: 'block', color: '#a7332f' }}>Locked until age {bucket.type === 'lisa' ? 60 : bucket.type === 'nhs-pension' ? 67 : pensionAccessAge}</small>}
-                </div>
-                <div>
-                  <div className="mobile-label">Lump Sum?</div>
-                  {isPension ? (
-                    <input
-                      type="checkbox"
-                      checked={drawdownSettings[bucket.id]?.lumpSumTaken ?? false}
-                      onChange={() => {
-                        const current = drawdownSettings[bucket.id] || { enabled: true, rate: 4 };
-                        setDrawdownSettings({ ...drawdownSettings, [bucket.id]: { ...current, lumpSumTaken: !current.lumpSumTaken } });
-                      }}
-                    />
-                  ) : (
-                    <span style={{ color: '#ccc', fontSize: '0.8rem' }}>N/A</span>
-                  )}
-                </div>
-                <div>
-                  <div className="mobile-label">Rate %</div>
-                  {bucket.type === 'nhs-pension' ? (
-                    <span style={{ fontSize: '0.8rem', color: '#2c5282' }}>Defined Benefit (Fixed)</span>
-                  ) : (
-                    <NumberInput 
-                      placeholder="4"
-                      value={drawdownSettings[bucket.id]?.rate ?? 4} 
-                      onChange={(rate) => {
-                        const current = drawdownSettings[bucket.id] || { enabled: true, rate: 4 };
-                        setDrawdownSettings({ ...drawdownSettings, [bucket.id]: { ...current, rate } });
-                      }}
-                      suffix="%" 
-                    />
-                  )}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </section>
-
-      <section className="panel span-12">
-        <PanelHeader 
-          title="Other Income Sources" 
-          actionLabel="Add Source" 
-          onAction={() => setOtherIncome([...otherIncome, {id: uid(), label: "Other Income", amount: 0, isTaxable: true}])} 
-        />
-        <div className="budget-lines">
-          <div className="budget-row header desktop-only">
-            <span>Source</span>
-            <span>Monthly Amount</span>
-            <span>Taxable?</span>
-            <span></span>
-          </div>
-          {otherIncome.map((item: any) => (
-            <div key={item.id} className="budget-row">
-              <div><div className="mobile-label">Source</div><TextInput placeholder="e.g. Rental Income" value={item.label} onChange={(l) => setOtherIncome(updateItem<any>(otherIncome, item.id, { label: l }))} /></div>
-              <div><div className="mobile-label">Amount</div><NumberInput placeholder="0" value={item.amount} onChange={(a) => setOtherIncome(updateItem<any>(otherIncome, item.id, { amount: a }))} /></div>
-              <div>
-                <div className="mobile-label">Taxable?</div>
-                <input 
-                  type="checkbox" 
-                  checked={item.isTaxable ?? false} 
-                  onChange={(e) => setOtherIncome(updateItem<any>(otherIncome, item.id, { isTaxable: e.target.checked }))} 
-                />
-              </div>
-              <button className="delete-btn" onClick={() => setOtherIncome(otherIncome.filter((i: any) => i.id !== item.id))}>×</button>
-            </div>
-          ))}
-        </div>
+        </details>
       </section>
 
       <section className="panel span-6">
@@ -1193,7 +1213,7 @@ function RetirementSection({
           ["Real Surplus (Today's Money)", summary.realSurplus],
         ]} />
         <div style={{ marginTop: '16px', fontSize: '0.85rem', color: '#666', borderTop: '1px solid #eee', paddingTop: '12px' }}>
-            <p><strong>Note:</strong> "Today's Money" accounts for your assumed {inflationRate}% inflation over {projectionYears} years.</p>
+            <p><strong>Note:</strong> "Today's Money" accounts for your assumed {inflationRate}% inflation over {projectionYears.toFixed(2)} years.</p>
         </div>
         {hasActiveLisa && retirementAge < 60 && (
           <p style={{color: '#a7332f', fontSize: '0.8rem', marginTop: '10px'}}>
@@ -1519,7 +1539,7 @@ function IncomeSection({
                     setSelfEmployment(
                       selfEmployment.map((item) =>
                         item.id === stream.id
-                          ? { ...item, expenses: [...item.expenses, { id: uid(), label: "Expense", amount: 0 }] }
+                          ? { ...item, expenses: [...item.expenses, { id: uid(), label: "Expense", amount: 0, bucket: 'living' }] }
                           : item,
                       ),
                     )
@@ -1537,20 +1557,10 @@ function IncomeSection({
   );
 }
 
-function TaxSection({
-  tax,
-  taxSettings,
-  setTaxSettings,
-  totalSippNet,
-}: {
-  tax: ReturnType<typeof calculateTaxSummary>;
-  taxSettings: TaxSettings;
-  setTaxSettings: React.Dispatch<React.SetStateAction<TaxSettings>>;
-  totalSippNet: number,
-}) {
+function SettingsSection({ taxSettings, setTaxSettings, birthYear, setBirthYear, birthMonth, setBirthMonth, tax }: any) {
   return (
     <div className="workspace">
-      <section className="panel span-5">
+      <section className="panel span-6">
         <h2>Tax Settings</h2>
         <div className="settings-grid">
           <label>
@@ -1564,37 +1574,27 @@ function TaxSection({
               <option value="scotland">Scotland</option>
             </select>
           </label>
-          <label>
-            Annual SIPP paid by you (net)
-            <div style={{ padding: '8px 0', fontWeight: 'bold' }}>{money.format(totalSippNet)}</div>
-            <small style={{ color: '#666', display: 'block', marginTop: '-4px' }}>Derived from savings buckets (SIPP/Pension)</small>
-          </label>
         </div>
-        {tax.sippNetNeededToReach100k > 0 ? (
-          <div className="callout amber">
-            <strong>{money.format(tax.sippGrossNeededToReach100k)} gross</strong>
-            <span>
-              extra gross SIPP contribution estimated to bring adjusted net income to GBP 100,000. That is about{" "}
-              {money.format(tax.sippNetNeededToReach100k)} paid by you if basic-rate relief is added by the provider.
-            </span>
-          </div>
-        ) : null}
+        <div className="callout neutral">
+          <ResultRows
+            rows={[
+              ["Personal allowance", tax.combinedTax.allowance],
+              ["Income tax", tax.combinedTax.totalTax],
+              ["National Insurance", tax.totalNi],
+            ]}
+          />
+        </div>
       </section>
-      <section className="panel span-7">
-        <h2>Tax Estimate</h2>
-        <ResultRows
-          rows={[
-            ["PAYE taxable", tax.payeTaxable],
-            ["Self-employed profit", tax.selfProfit],
-            ["Adjusted net income", tax.combinedTax.adjustedNetIncome],
-            ["Personal allowance", tax.combinedTax.allowance],
-            ["Income tax", tax.combinedTax.totalTax],
-            ["National Insurance", tax.totalNi],
-            ["PAYE tax credited", tax.assumedPayeTaxPaid],
-            ["Self assessment due", tax.selfAssessmentDue],
-          ]}
-        />
-        <BandChart bands={tax.combinedTax.bandResults} />
+
+      <section className="panel span-6">
+        <h2>Profile Details</h2>
+        <div className="settings-grid">
+          <label>Birth Year <input type="number" placeholder="YYYY" value={birthYear || ""} onChange={e => setBirthYear(Number(e.target.value))} /></label>
+          <label>Birth Month (1-12) <input type="number" min="1" max="12" placeholder="MM" value={birthMonth || ""} onChange={e => setBirthMonth(Number(e.target.value))} /></label>
+        </div>
+        <p className="notice" style={{ maxWidth: 'none' }}>
+          These details are used to calculate your current age and pension access dates.
+        </p>
       </section>
     </div>
   );
@@ -1642,6 +1642,7 @@ function BudgetSection({
                 <option value="tax">Tax</option>
                 <option value="food">Food</option>
                 <option value="entertainment">Entertainment</option>
+                <option value="professional">Professional</option>
               </select></div>
 
               <div><div className="mobile-label">Amount</div><NumberInput placeholder="0" value={line.amount} onChange={(amount) => setBudgetLines(updateItem(budgetLines, line.id, { amount }))} /></div>
@@ -1652,16 +1653,27 @@ function BudgetSection({
       </section>
 
       <section className="panel span-6">
-        <PanelHeader title="Annual Bills" actionLabel="Add annual bill" onAction={() => setAnnualBills([...annualBills, { id: uid(), label: "Annual bill", amount: 0 }])} />
+        <PanelHeader title="Annual Bills" actionLabel="Add annual bill" onAction={() => setAnnualBills([...annualBills, { id: uid(), label: "Annual bill", amount: 0, bucket: 'living' }])} />
         <div className="budget-lines">
-          <div className="expense-row header desktop-only">
+          <div className="budget-row header desktop-only">
             <span>Label</span>
+            <span>Category</span>
             <span>Amount</span>
             <span></span>
           </div>
           {annualBills.map((line) => (
-            <div className="expense-row" key={line.id}>
+            <div className="budget-row" key={line.id}>
               <div><div className="mobile-label">Label</div><TextInput placeholder="e.g. Car Insurance" value={line.label} onChange={(label) => setAnnualBills(updateItem(annualBills, line.id, { label }))} /></div>
+              <div><div className="mobile-label">Category</div><select value={line.bucket} onChange={(event) => setAnnualBills(updateItem(annualBills, line.id, { bucket: event.target.value as any }))}>
+                <option value="living">Living</option>
+                <option value="housing">Housing</option>
+                <option value="debt">Debt</option>
+                <option value="tax">Tax</option>
+                <option value="food">Food</option>
+                <option value="entertainment">Entertainment</option>
+                <option value="professional">Professional</option>
+                <option value="saving">Saving</option>
+              </select></div>
               <div><div className="mobile-label">Amount</div><NumberInput placeholder="0" value={line.amount} onChange={(amount) => setAnnualBills(updateItem(annualBills, line.id, { amount }))} /></div>
               <button className="delete-btn" onClick={() => setAnnualBills(annualBills.filter((l: any) => l.id !== line.id))}>×</button>
             </div>
