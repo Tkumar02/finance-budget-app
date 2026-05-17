@@ -1,6 +1,7 @@
 import { initializeApp } from "firebase/app";
 import { getAuth } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
+import { getAI, VertexAIBackend } from "firebase/ai";
 
 const firebaseConfig = {
   apiKey: "AIzaSyDjK3nV2R5jbWkJ8Unh4S5h8vs7LRh00lM",
@@ -14,3 +15,6 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
 export const db = getFirestore(app);
+export const ai = getAI(app, {
+  backend: new VertexAIBackend('us-central1')
+});

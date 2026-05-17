@@ -3,7 +3,9 @@ import { createRoot } from "react-dom/client";
 import {
   auth,
   db,
+  ai,
 } from "./firebase";
+import { getGenerativeModel } from "firebase/ai";
 import {
   onAuthStateChanged,
   signInWithEmailAndPassword,
@@ -43,6 +45,8 @@ import {
   calculateNhsEmployeeRate,
   NHS_EMPLOYER_RATE,
   calculateRetirementGrossRequired,
+  getFinancialSnapshot,
+  FinancialSnapshot,
 } from "./calculations";
 import "./styles.css";
 
@@ -778,7 +782,6 @@ const projectionBuckets = useMemo(() => {
 
       {activeSection === "retirement" ? (
         <RetirementSection
-          birthYear={birthYear} setBirthYear={setBirthYear}
           retirementAge={retirementAge}
           setRetirementAge={(targetAge: number) => setProjectionYears(Math.max(0, targetAge - currentAge))}
           outgoings={expectedOutgoings} setOutgoings={setExpectedOutgoings}
@@ -804,6 +807,12 @@ const projectionBuckets = useMemo(() => {
           setTaxableFraction={setRetirementTaxableFraction}
           taxSettings={taxSettings}
           drawdownRate={drawdownRate}
+          mortgage={mortgage}
+          mortgageSummary={mortgageSummary}
+          birthYear={birthYear}
+          setBirthYear={setBirthYear}
+          birthMonth={birthMonth}
+          setBirthMonth={setBirthMonth}
           />
       ) : null}
 
@@ -841,9 +850,15 @@ function RetirementSection({
   setTaxableFraction,
   taxSettings,
   drawdownRate,
+  mortgage,
+  mortgageSummary,
+  birthMonth,
+  setBirthMonth,
 }: {
   birthYear: number;
   setBirthYear: (y: number) => void;
+  birthMonth: number;
+  setBirthMonth: (m: number) => void;
   retirementAge: number;
   setRetirementAge: (a: number) => void;
   outgoings: number;
@@ -871,6 +886,8 @@ function RetirementSection({
   setTaxableFraction: (f: number) => void;
   taxSettings: TaxSettings;
   drawdownRate: number;
+  mortgage: MortgageInputs;
+  mortgageSummary: any;
 }) {
   const hasActiveLisa = projectedSavings.some((b: any) => b.type === 'lisa' && (drawdownSettings[b.id]?.enabled ?? true));
 
@@ -1049,8 +1066,35 @@ function RetirementSection({
                   </div>
 
                   <div style={{ marginTop: '16px', paddingTop: '16px', borderTop: '1px dashed #ccc' }}>
-                    <div className="retirement-comparison-grid">
-                      <div className={`metric pension-card ${pensionSurplus >= 0 ? 'green' : 'red'}`} style={{ minHeight: 'auto', padding: '12px' }}>
+                    <button 
+                      className="wide-action" 
+                      onClick={async () => {
+                        const snapshot = getFinancialSnapshot(birthYear, birthMonth, retirementAge, budgetExpenses, mortgageSummary, mortgage, projectedSavings, otherIncome);
+                        alert("Analyzing... Please wait.");
+                        try {
+                          const model = getGenerativeModel(ai, { model: 'gemini-2.5-flash' });
+                          const prompt = `
+                            You are a UK retirement strategy expert. Analyze the following financial snapshot and provide a concise, actionable 3-step drawdown strategy.
+                            Prioritize tax efficiency, state pension bridging, and mortgage payoff.
+
+                            Snapshot: ${JSON.stringify(snapshot)}
+
+                            Output format:
+                            1. **Key Observation**: 1 sentence on the biggest strength/risk.
+                            2. **Strategy**: 3 clear bullet points.
+                            3. **Warning**: Any potential tax traps or risks.
+                          `;
+
+                          const result = await model.generateContent(prompt);
+                          const response = result.response;
+                          alert("Analysis:\n" + response.text());                        } catch (e: any) {
+                          console.error(e);
+                          alert("Analysis failed: " + e.message);
+                        }
+                      }}
+                    >
+                      Analyze Retirement Strategy
+                    </button>                    <div className="retirement-comparison-grid">                      <div className={`metric pension-card ${pensionSurplus >= 0 ? 'green' : 'red'}`} style={{ minHeight: 'auto', padding: '12px' }}>
                         <span style={{ fontSize: '0.75rem' }}>Projected Pension Pot</span>
                         <strong style={{ fontSize: '1.2rem' }}>{money.format(actualProjectedTotals.pension)}</strong>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '4px' }}>

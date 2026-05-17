@@ -420,6 +420,69 @@ function calculateInterestWithoutOverpayments(amount: number, annualRate: number
   return interestTotal;
 }
 
+export type FinancialSnapshot = {
+  profile: { currentAge: number; retirementAge: number };
+  financialHealth: {
+    monthlyExpenses: number;
+    mortgage: { 
+      remaining: number; 
+      monthlyPayment: number; 
+      monthsToPayoff: number; 
+    };
+  };
+  buckets: {
+    id: string;
+    type: string;
+    balance: number;
+    projected: number;
+    isTaxable: boolean;
+  }[];
+  incomeStreams: {
+    label: string;
+    amount: number;
+    isTaxable: boolean;
+  }[];
+};
+
+export function getFinancialSnapshot(
+  birthYear: number,
+  birthMonth: number,
+  retirementAge: number,
+  budgetExpenses: number,
+  mortgageSummary: any,
+  mortgageInputs: MortgageInputs,
+  savings: any[],
+  otherIncome: any[]
+): FinancialSnapshot {
+  const currentYear = new Date().getFullYear();
+  const currentMonth = new Date().getMonth() + 1;
+  const currentAge = (currentYear - birthYear) + (currentMonth - birthMonth) / 12;
+
+  return {
+    profile: { currentAge, retirementAge },
+    financialHealth: {
+      monthlyExpenses: budgetExpenses,
+      mortgage: {
+        remaining: mortgageInputs.amount,
+        monthlyPayment: mortgageSummary.standardPayment,
+        monthsToPayoff: mortgageSummary.payoffMonths,
+      },
+    },
+    buckets: savings.map(s => ({
+      id: s.id,
+      type: s.type,
+      balance: s.balance,
+      projected: s.projected || 0,
+      isTaxable: ['pension', 'workplace-private-pension', 'nhs-pension', 'civil-service-pension', 'teachers-pension'].includes(s.type),
+    })),
+    incomeStreams: otherIncome.map(i => ({
+      label: i.label,
+      amount: i.amount,
+      isTaxable: i.isTaxable || false,
+    }))
+  };
+}
+
 export function calculateRetirementGrossRequired(
   targetNetFromPots: number,
   taxableFraction: number,
