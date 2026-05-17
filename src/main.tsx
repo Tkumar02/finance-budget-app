@@ -1085,16 +1085,21 @@ function RetirementSection({
                         try {
                           const model = getGenerativeModel(ai, { model: 'gemini-2.5-flash' });
                           const prompt = `
-                            You are a UK retirement expert. Analyze this snapshot and provide a PUNCHY strategy.
+                            You are a senior UK retirement strategist. Analyze this financial snapshot and provide a ultra-concise, punchy strategy.
                             
-                            1. **Can they retire at ${snapshot.profile.retirementAge}?** Give a definitive Yes/No/Likely.
-                            2. **The Plan**: If Yes, describe the drawdown sequence (e.g., Use ISAs to bridge to Pensions). If No, provide 2 clear options (e.g., "Need a job with £XXX gross income" or "Increase ISA to £XXX").
-                            3. **Mortgage Check**: Mention that the mortgage is ${snapshot.financialHealth.mortgage.willBePaidOffAtRetirement ? 'fully paid off' : 'still active'} at retirement.
-                            4. **Efficiency**: 1 tip to minimize income tax.
+                            1. **Feasibility**: Can they retire at age ${snapshot.profile.retirementAge.toFixed(2)}? Start your response with a definitive "YES", "NO", or "LIKELY".
+                            2. **The Logic**: 
+                               - If YES: Explain the bridge (e.g., "Use ISA pot to cover the gap until NHS Pension at 67").
+                               - If NO: Be specific. Tell them exactly what's missing (e.g., "You need a job earning £25k gross" or "You need an extra £100k in your ISA").
+                            3. **Mortgage**: Confirm that by age ${snapshot.profile.retirementAge.toFixed(2)}, their mortgage is ${snapshot.financialHealth.mortgage.willBePaidOffAtRetirement ? 'fully PAID' : 'STILL ACTIVE'}.
+                            4. **Efficiency**: One specific UK tax tip (e.g. Personal Allowance, SIPP relief, or ISA rules).
 
-                            Snapshot: ${JSON.stringify(snapshot)}
+                            Snapshot Data: ${JSON.stringify(snapshot)}
 
-                            Formatting: Use **bold** for key numbers. Keep it under 150 words.
+                            Rules: 
+                            - Use **bold** for all currency and age figures.
+                            - Limit to 3 short paragraphs max.
+                            - Do not use filler words like "Based on the data provided".
                           `;
 
                           const result = await model.generateContent(prompt);

@@ -324,35 +324,73 @@ export function futureValue(balance: number, monthly: number, annualRate: number
 export function projectSavings(buckets: SavingsBucket[], years: number, birthYear: number) {
   const currentYear = new Date().getFullYear();
   const startAge = currentYear - birthYear;
+  const months = Math.max(0, Math.round(years * 12));
+  
+  // Initialize running state for each bucket
+  const bucketStates = buckets.map(b => ({
+    ...b,
+    currentBalance: clampNumber(b.balance),
+    totalContributed: clampNumber(b.balance)
+  }));
 
-  return buckets.map((bucket) => {
-    let balance = clampNumber(bucket.balance);
-    const annualRate = clampNumber(bucket.annualRate) / 100;
-    const monthlyRate = annualRate / 12;
-    const months = Math.max(0, Math.round(years * 12));
+  for (let m = 0; m < months; m++) {
+    const ageAtMonth = startAge + (m / 12);
+    let divertedLisaAmount = 0;
 
-    for (let i = 0; i < months; i++) {
-      const ageAtMonth = startAge + (i / 12);
-      let monthlyContribution = clampNumber(bucket.monthly);
-
-      // LISA Rules: +25% bonus until 50, then stop
-      if (bucket.type === 'lisa') {
+    // 1. Calculate base contributions and identify LISA diversions
+    const monthlyContributions = bucketStates.map(b => {
+      let contrib = clampNumber(b.monthly);
+      if (b.type === 'lisa') {
         if (ageAtMonth < 50) {
-          monthlyContribution = monthlyContribution * 1.25;
+          // Add the 25% government bonus
+          return contrib * 1.25;
         } else {
-          monthlyContribution = 0;
+          // Contributions stop at 50, divert the original amount
+          divertedLisaAmount += contrib;
+          return 0;
         }
       }
+      return contrib;
+    });
 
-      balance = balance * (1 + monthlyRate) + monthlyContribution;
+    // 2. Reallocate diverted LISA money (Smart Allocation)
+    if (divertedLisaAmount > 0) {
+      // Step A: Move to standard ISA (up to £1,666.67/mo total limit)
+      const isaIdx = bucketStates.findIndex(b => b.type === 'isa');
+      if (isaIdx !== -1) {
+        const currentIsaMonthly = bucketStates[isaIdx].monthly;
+        const availableRoom = Math.max(0, 1666.67 - currentIsaMonthly);
+        const amountToDivert = Math.min(divertedLisaAmount, availableRoom);
+        
+        monthlyContributions[isaIdx] += amountToDivert;
+        divertedLisaAmount -= amountToDivert;
+      }
+
+      // Step B: Move any remaining diverted money to Cash savings
+      if (divertedLisaAmount > 0) {
+        const cashIdx = bucketStates.findIndex(b => b.type === 'cash');
+        if (cashIdx !== -1) {
+          monthlyContributions[cashIdx] += divertedLisaAmount;
+          divertedLisaAmount = 0;
+        }
+      }
     }
 
-    return {
-      ...bucket,
-      projected: balance,
-      contributed: bucket.balance + (bucket.type === 'lisa' && startAge >= 50 ? 0 : bucket.monthly * years * 12),
-    };
-  });
+    // 3. Apply growth and contributions to all buckets
+    bucketStates.forEach((b, idx) => {
+      const monthlyRate = clampNumber(b.annualRate) / 100 / 12;
+      const contrib = monthlyContributions[idx];
+      
+      b.currentBalance = (b.currentBalance * (1 + monthlyRate)) + contrib;
+      b.totalContributed += contrib;
+    });
+  }
+
+  return bucketStates.map(b => ({
+    ...b,
+    projected: b.currentBalance,
+    contributed: b.totalContributed,
+  }));
 }
 
 export function monthlyMortgagePayment(amount: number, annualRate: number, years: number) {
