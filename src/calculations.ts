@@ -428,6 +428,8 @@ export type FinancialSnapshot = {
       remaining: number; 
       monthlyPayment: number; 
       monthsToPayoff: number; 
+      willBePaidOffAtRetirement: boolean;
+      ageAtPayoff: number;
     };
   };
   buckets: {
@@ -457,6 +459,10 @@ export function getFinancialSnapshot(
   const currentYear = new Date().getFullYear();
   const currentMonth = new Date().getMonth() + 1;
   const currentAge = (currentYear - birthYear) + (currentMonth - birthMonth) / 12;
+  
+  const monthsUntilRetirement = (retirementAge - currentAge) * 12;
+  const willBePaidOffAtRetirement = mortgageSummary.payoffMonths <= monthsUntilRetirement;
+  const ageAtPayoff = currentAge + (mortgageSummary.payoffMonths / 12);
 
   return {
     profile: { currentAge, retirementAge },
@@ -466,6 +472,8 @@ export function getFinancialSnapshot(
         remaining: mortgageInputs.amount,
         monthlyPayment: mortgageSummary.standardPayment,
         monthsToPayoff: mortgageSummary.payoffMonths,
+        willBePaidOffAtRetirement,
+        ageAtPayoff
       },
     },
     buckets: savings.map(s => ({

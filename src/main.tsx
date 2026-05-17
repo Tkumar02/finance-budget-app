@@ -889,6 +889,9 @@ function RetirementSection({
   mortgage: MortgageInputs;
   mortgageSummary: any;
 }) {
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [analysisResult, setAnalysisResult] = useState<string | null>(null);
+
   const hasActiveLisa = projectedSavings.some((b: any) => b.type === 'lisa' && (drawdownSettings[b.id]?.enabled ?? true));
 
   const targetGrossSummary = useMemo(() => {
@@ -966,55 +969,60 @@ function RetirementSection({
               Select which current expenses and annual bills will continue into retirement.
             </div>
             
-            <div className="budget-lines" style={{ maxHeight: '300px', overflowY: 'auto', border: '1px solid #eee', padding: '12px', borderRadius: '8px', marginBottom: '16px' }}>
-              <h4 style={{ margin: '0 0 10px 0', fontSize: '0.8rem', color: '#666' }}>MONTHLY EXPENSES</h4>
-              {budgetLines.map((line: any) => (
-                <div key={line.id} style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '8px 0', borderBottom: '1px solid #f9f9f9' }}>
-                  <input 
-                    type="checkbox" 
-                    checked={line.includeInRetirement ?? true} 
-                    onChange={(e) => setBudgetLines(updateItem(budgetLines, line.id, { includeInRetirement: e.target.checked }))} 
-                  />
-                  <span style={{ flex: 1 }}>{line.label} <small style={{ color: '#888' }}>({line.bucket})</small></span>
-                  <strong style={{ minWidth: '80px', textAlign: 'right' }}>{monthlyMoney.format(line.amount)}</strong>
-                </div>
-              ))}
-
-              <h4 style={{ margin: '20px 0 10px 0', fontSize: '0.8rem', color: '#666' }}>ANNUAL BILLS</h4>
-              {annualBills.map((bill: any) => (
-                <div key={bill.id} style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '8px 0', borderBottom: '1px solid #f9f9f9' }}>
-                  <input 
-                    type="checkbox" 
-                    checked={bill.includeInRetirement ?? true} 
-                    onChange={(e) => setAnnualBills(updateItem(annualBills, bill.id, { includeInRetirement: e.target.checked }))} 
-                  />
-                  <span style={{ flex: 1 }}>{bill.label}</span>
-                  <strong style={{ minWidth: '80px', textAlign: 'right' }}>{monthlyMoney.format(bill.amount / 12)} <small style={{ fontWeight: 400, color: '#888' }}>/mo</small></strong>
-                </div>
-              ))}
-
-              <h4 style={{ margin: '20px 0 10px 0', fontSize: '0.8rem', color: '#24594f', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                ADDITIONAL RETIREMENT COSTS
-                <button 
-                  onClick={() => setAdditionalExpenses([...additionalExpenses, { id: uid(), label: "New Future Cost", amount: 0, bucket: 'living' }])}
-                  style={{ fontSize: '0.7rem', height: '24px', minHeight: 'auto', padding: '0 8px' }}
-                >
-                  + Add
-                </button>
-              </h4>
-              {additionalExpenses.map((item: any) => (
-                <div key={item.id} style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '8px 0', borderBottom: '1px solid #f9f9f9' }}>
-                  <input type="checkbox" checked readOnly style={{ opacity: 0.5 }} />
-                  <div style={{ flex: 1 }}>
-                    <TextInput placeholder="e.g. Travel" value={item.label} onChange={(l) => setAdditionalExpenses(updateItem(additionalExpenses, item.id, { label: l }))} />
+            <details style={{ marginBottom: '16px', border: '1px solid #eee', borderRadius: '8px' }}>
+              <summary style={{ padding: '12px', fontSize: '0.85rem', fontWeight: 600, color: '#666', background: '#fafafa', borderRadius: '8px', cursor: 'pointer' }}>
+                View/Edit Retirement Expense List ({budgetLines.length + annualBills.length + additionalExpenses.length} items)
+              </summary>
+              <div className="budget-lines" style={{ maxHeight: '300px', overflowY: 'auto', padding: '12px' }}>
+                <h4 style={{ margin: '0 0 10px 0', fontSize: '0.8rem', color: '#666' }}>MONTHLY EXPENSES</h4>
+                {budgetLines.map((line: any) => (
+                  <div key={line.id} style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '8px 0', borderBottom: '1px solid #f9f9f9' }}>
+                    <input 
+                      type="checkbox" 
+                      checked={line.includeInRetirement ?? true} 
+                      onChange={(e) => setBudgetLines(updateItem(budgetLines, line.id, { includeInRetirement: e.target.checked }))} 
+                    />
+                    <span style={{ flex: 1 }}>{line.label} <small style={{ color: '#888' }}>({line.bucket})</small></span>
+                    <strong style={{ minWidth: '80px', textAlign: 'right' }}>{monthlyMoney.format(line.amount)}</strong>
                   </div>
-                  <div style={{ width: '100px' }}>
-                    <NumberInput placeholder="0" value={item.amount} onChange={(a) => setAdditionalExpenses(updateItem(additionalExpenses, item.id, { amount: a }))} />
+                ))}
+
+                <h4 style={{ margin: '20px 0 10px 0', fontSize: '0.8rem', color: '#666' }}>ANNUAL BILLS</h4>
+                {annualBills.map((bill: any) => (
+                  <div key={bill.id} style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '8px 0', borderBottom: '1px solid #f9f9f9' }}>
+                    <input 
+                      type="checkbox" 
+                      checked={bill.includeInRetirement ?? true} 
+                      onChange={(e) => setAnnualBills(updateItem(annualBills, bill.id, { includeInRetirement: e.target.checked }))} 
+                    />
+                    <span style={{ flex: 1 }}>{bill.label}</span>
+                    <strong style={{ minWidth: '80px', textAlign: 'right' }}>{monthlyMoney.format(bill.amount / 12)} <small style={{ fontWeight: 400, color: '#888' }}>/mo</small></strong>
                   </div>
-                  <button className="delete-btn" onClick={() => setAdditionalExpenses(additionalExpenses.filter((i: any) => i.id !== item.id))}>×</button>
-                </div>
-              ))}
-            </div>
+                ))}
+
+                <h4 style={{ margin: '20px 0 10px 0', fontSize: '0.8rem', color: '#24594f', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  ADDITIONAL RETIREMENT COSTS
+                  <button 
+                    onClick={() => setAdditionalExpenses([...additionalExpenses, { id: uid(), label: "New Future Cost", amount: 0, bucket: 'living' }])}
+                    style={{ fontSize: '0.7rem', height: '24px', minHeight: 'auto', padding: '0 8px' }}
+                  >
+                    + Add
+                  </button>
+                </h4>
+                {additionalExpenses.map((item: any) => (
+                  <div key={item.id} style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '8px 0', borderBottom: '1px solid #f9f9f9' }}>
+                    <input type="checkbox" checked readOnly style={{ opacity: 0.5 }} />
+                    <div style={{ flex: 1 }}>
+                      <TextInput placeholder="e.g. Travel" value={item.label} onChange={(l) => setAdditionalExpenses(updateItem(additionalExpenses, item.id, { label: l }))} />
+                    </div>
+                    <div style={{ width: '100px' }}>
+                      <NumberInput placeholder="0" value={item.amount} onChange={(a) => setAdditionalExpenses(updateItem(additionalExpenses, item.id, { amount: a }))} />
+                    </div>
+                    <button className="delete-btn" onClick={() => setAdditionalExpenses(additionalExpenses.filter((i: any) => i.id !== item.id))}>×</button>
+                  </div>
+                ))}
+              </div>
+            </details>
 
             <div className="callout neutral" style={{ marginTop: '16px' }}>
               <ResultRows rows={[
@@ -1067,34 +1075,59 @@ function RetirementSection({
 
                   <div style={{ marginTop: '16px', paddingTop: '16px', borderTop: '1px dashed #ccc' }}>
                     <button 
-                      className="wide-action" 
+                      className={`wide-action ${isAnalyzing ? 'loading' : ''}`}
+                      disabled={isAnalyzing}
                       onClick={async () => {
+                        setIsAnalyzing(true);
+                        setAnalysisResult(null);
                         const snapshot = getFinancialSnapshot(birthYear, birthMonth, retirementAge, budgetExpenses, mortgageSummary, mortgage, projectedSavings, otherIncome);
-                        alert("Analyzing... Please wait.");
+
                         try {
                           const model = getGenerativeModel(ai, { model: 'gemini-2.5-flash' });
                           const prompt = `
-                            You are a UK retirement strategy expert. Analyze the following financial snapshot and provide a concise, actionable 3-step drawdown strategy.
-                            Prioritize tax efficiency, state pension bridging, and mortgage payoff.
+                            You are a UK retirement expert. Analyze this snapshot and provide a PUNCHY strategy.
+                            
+                            1. **Can they retire at ${snapshot.profile.retirementAge}?** Give a definitive Yes/No/Likely.
+                            2. **The Plan**: If Yes, describe the drawdown sequence (e.g., Use ISAs to bridge to Pensions). If No, provide 2 clear options (e.g., "Need a job with £XXX gross income" or "Increase ISA to £XXX").
+                            3. **Mortgage Check**: Mention that the mortgage is ${snapshot.financialHealth.mortgage.willBePaidOffAtRetirement ? 'fully paid off' : 'still active'} at retirement.
+                            4. **Efficiency**: 1 tip to minimize income tax.
 
                             Snapshot: ${JSON.stringify(snapshot)}
 
-                            Output format:
-                            1. **Key Observation**: 1 sentence on the biggest strength/risk.
-                            2. **Strategy**: 3 clear bullet points.
-                            3. **Warning**: Any potential tax traps or risks.
+                            Formatting: Use **bold** for key numbers. Keep it under 150 words.
                           `;
 
                           const result = await model.generateContent(prompt);
-                          const response = result.response;
-                          alert("Analysis:\n" + response.text());                        } catch (e: any) {
+                          setAnalysisResult(result.response.text());
+                        } catch (e: any) {
                           console.error(e);
-                          alert("Analysis failed: " + e.message);
+                          setAnalysisResult("Analysis failed: " + e.message);
+                        } finally {
+                          setIsAnalyzing(false);
                         }
                       }}
                     >
-                      Analyze Retirement Strategy
-                    </button>                    <div className="retirement-comparison-grid">                      <div className={`metric pension-card ${pensionSurplus >= 0 ? 'green' : 'red'}`} style={{ minHeight: 'auto', padding: '12px' }}>
+                      {isAnalyzing ? "🤖 Strategy Engine Analysing..." : "✨ Analyze Retirement Strategy"}
+                    </button>
+
+                    {analysisResult && (
+                      <div className="callout ai-result" style={{ marginTop: '16px', padding: '20px', textAlign: 'left', lineHeight: '1.6' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '16px', alignItems: 'center' }}>
+                          <h3 style={{ margin: 0, fontSize: '0.9rem', color: '#24594f', letterSpacing: '0.05em' }}>AI RETIREMENT STRATEGY</h3>
+                          <button 
+                            onClick={() => setAnalysisResult(null)}
+                            style={{ background: '#eee', color: '#666', border: 'none', padding: '4px 8px', borderRadius: '4px', cursor: 'pointer', fontSize: '0.7rem' }}
+                          >
+                            Dismiss
+                          </button>
+                        </div>
+                        <div className="markdown-content" style={{ fontSize: '0.85rem', color: '#333' }}>
+                          {analysisResult.split('\n').map((line, i) => (
+                            <p key={i} style={{ margin: '4px 0' }}>{line}</p>
+                          ))}
+                        </div>
+                      </div>
+                    )}                    <div className="retirement-comparison-grid">                      <div className={`metric pension-card ${pensionSurplus >= 0 ? 'green' : 'red'}`} style={{ minHeight: 'auto', padding: '12px' }}>
                         <span style={{ fontSize: '0.75rem' }}>Projected Pension Pot</span>
                         <strong style={{ fontSize: '1.2rem' }}>{money.format(actualProjectedTotals.pension)}</strong>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '4px' }}>

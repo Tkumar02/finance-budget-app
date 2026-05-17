@@ -455,13 +455,62 @@ h2 {
   cursor: pointer;
 }
 
-.split-slider::-moz-range-thumb {
-  width: 20px;
-  height: 20px;
-  border-radius: 50%;
-  background: #fff;
-  border: 2px solid #555;
+.wide-action {
+  width: 100%;
+  padding: 14px;
+  background: #24594f;
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  font-weight: 700;
+  font-size: 1rem;
   cursor: pointer;
+  margin-bottom: 20px;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+}
+
+.wide-action:hover:not(:disabled) {
+  background: #1a4a40;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+}
+
+.wide-action:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+.wide-action.loading {
+  animation: pulse 1.5s infinite;
+}
+
+@keyframes pulse {
+  0% { opacity: 1; }
+  50% { opacity: 0.6; }
+  100% { opacity: 1; }
+}
+
+.ai-result {
+  border: 2px solid #24594f !important;
+  background: #f0f7f4 !important;
+  animation: slideIn 0.3s ease-out;
+}
+
+@keyframes slideIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.markdown-content strong {
+  color: #24594f;
+}
+
+.markdown-content p {
+  margin-bottom: 8px;
 }
 
 .disclosure-section {
