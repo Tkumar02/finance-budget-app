@@ -2233,8 +2233,11 @@ function DepletionChart({ projectedSavings, drawdownSettings, retirementAge, pen
   return (
     <div className='depletion-chart' style={{ marginTop: '24px' }}>
       <h3>Pot Depletion Projection</h3>
-      <div style={{ marginBottom: '16px', fontSize: '0.8rem', color: '#666', fontStyle: 'italic' }}>
+      {/* <div style={{ marginBottom: '16px', fontSize: '0.8rem', color: '#666', fontStyle: 'italic' }}>
         * Starting values reflect your accumulated savings plus growth from age {Math.round(retirementAge - (projectedSavings[0]?.contributed > 0 ? (projectedSavings[0]?.projected / (projectedSavings[0]?.monthly * 12 || 1)) : 0))} until retirement.
+      </div> */}
+            <div style={{ marginBottom: '16px', fontSize: '0.8rem', color: '#666', fontStyle: 'italic' }}>
+        * Starting values reflect your accumulated savings plus growth
       </div>
       <LineChart data={data} years={years} colors={colors} />
     </div>)
