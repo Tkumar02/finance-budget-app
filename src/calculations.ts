@@ -6,7 +6,6 @@ export type PayeIncome = {
   gross: number;
   pensionRate: number;
   employerPensionContribution: number;
-  taxPaid: number;
   pensionType?: "standard" | "nhs" | "civil-service" | "teachers";
 };
 
@@ -37,7 +36,9 @@ export type SavingsBucket = {
   monthly: number;
   annualRate: number;
   type: "cash" | "isa" | "pension" | "lisa" | "workplace-private-pension" | "nhs-pension" | "civil-service-pension" | "teachers-pension";
-  isHidden?:boolean;
+  isHidden?: boolean;
+  stopContributingAge?: number;
+  startWithdrawalAge?: number;
   dbSalary?: number;
   dbYearsService?: number;
   dbScheme?: string;
@@ -254,7 +255,10 @@ export function calculateTaxSummary(incomes: PayeIncome[], streams: SelfEmployme
   const employmentPensionTotal = employmentPension(incomes);
   const employerPensionTotal = employerPensionContributions(incomes);
   
-  const netAnnual = payeGross - employmentPensionTotal - assumedPayeTaxPaid - payeNi + selfProfit - selfAssessmentDue - selfNi;
+  const selfTaxTotal = selfAssessmentDue + selfNi;
+  const netAnnual = payeGross - employmentPensionTotal - assumedPayeTaxPaid - payeNi + selfProfit - selfTaxTotal;
+  const cashAnnual = payeGross - employmentPensionTotal - assumedPayeTaxPaid - payeNi + selfProfit;
+  
   const sippGrossNeededToReach100k = Math.max(0, combinedTax.adjustedNetIncome - 100000);
   const sippNetNeededToReach100k = sippGrossNeededToReach100k * 0.8;
 
@@ -269,8 +273,8 @@ export function calculateTaxSummary(incomes: PayeIncome[], streams: SelfEmployme
     combinedTax,
     assumedPayeTaxPaid,
     selfAssessmentDue,
-    payeNi,
     selfNi,
+    selfTaxTotal,
     totalNi,
     sippGrossNeededToReach100k,
     sippNetNeededToReach100k,
@@ -278,6 +282,8 @@ export function calculateTaxSummary(incomes: PayeIncome[], streams: SelfEmployme
     employerPensionTotal,
     netAnnual,
     monthlyNet: netAnnual / 12,
+    cashAnnual,
+    cashMonthlyNet: cashAnnual / 12,
   };
 }
 
@@ -320,32 +326,49 @@ export function futureValue(balance: number, monthly: number, annualRate: number
   return value;
 }
 
-// Replace your existing projectSavings in calculations.ts with this:
-export function projectSavings(buckets: SavingsBucket[], years: number, birthYear: number) {
+export function projectSavings(buckets: SavingsBucket[], years: number, birthYear: number, drawdownSettings: Record<string, any> = {}, inflationRate: number = 3) {
   const currentYear = new Date().getFullYear();
-  const startAge = currentYear - birthYear;
+  const currentMonth = new Date().getMonth() + 1;
+  const startAge = (currentYear - birthYear) + (currentMonth / 12); // Approximate current age
   const months = Math.max(0, Math.round(years * 12));
   
-  // Initialize running state for each bucket
   const bucketStates = buckets.map(b => ({
     ...b,
     currentBalance: clampNumber(b.balance),
-    totalContributed: clampNumber(b.balance)
+    totalContributed: clampNumber(b.balance),
+    withdrawnValue: 0,
+    isWithdrawn: false
   }));
 
   for (let m = 0; m < months; m++) {
     const ageAtMonth = startAge + (m / 12);
     let divertedLisaAmount = 0;
 
-    // 1. Calculate base contributions and identify LISA diversions
+    // 1. Determine contributions for this month
     const monthlyContributions = bucketStates.map(b => {
+      if (b.isWithdrawn) return 0;
+
+      const settings = drawdownSettings[b.id] || {};
+      const effectiveWithdrawAge = settings.useWithdrawAge ? settings.withdrawAge : b.startWithdrawalAge;
+      const effectiveStopAge = settings.useStopAge ? settings.stopAge : b.stopContributingAge;
+
+      // If withdrawal age reached, stop contributions
+      if (effectiveWithdrawAge && ageAtMonth >= effectiveWithdrawAge) {
+        return 0;
+      }
+
       let contrib = clampNumber(b.monthly);
+
+      // Check for manual contribution stop age
+      if (effectiveStopAge && ageAtMonth >= effectiveStopAge) {
+        contrib = 0;
+      }
+
+      // LISA logic
       if (b.type === 'lisa') {
         if (ageAtMonth < 50) {
-          // Add the 25% government bonus
           return contrib * 1.25;
         } else {
-          // Contributions stop at 50, divert the original amount
           divertedLisaAmount += contrib;
           return 0;
         }
@@ -353,34 +376,47 @@ export function projectSavings(buckets: SavingsBucket[], years: number, birthYea
       return contrib;
     });
 
-    // 2. Reallocate diverted LISA money (Smart Allocation)
+    // 2. Diversion logic (LISA -> ISA -> Cash)
     if (divertedLisaAmount > 0) {
-      // Step A: Move to standard ISA (up to £1,666.67/mo total limit)
-      const isaIdx = bucketStates.findIndex(b => b.type === 'isa');
+      const isaIdx = bucketStates.findIndex(b => b.type === 'isa' && !b.isWithdrawn);
       if (isaIdx !== -1) {
         const currentIsaMonthly = bucketStates[isaIdx].monthly;
         const availableRoom = Math.max(0, 1666.67 - currentIsaMonthly);
         const amountToDivert = Math.min(divertedLisaAmount, availableRoom);
-        
         monthlyContributions[isaIdx] += amountToDivert;
         divertedLisaAmount -= amountToDivert;
       }
-
-      // Step B: Move any remaining diverted money to Cash savings
       if (divertedLisaAmount > 0) {
-        const cashIdx = bucketStates.findIndex(b => b.type === 'cash');
+        const cashIdx = bucketStates.findIndex(b => b.type === 'cash' && !b.isWithdrawn);
         if (cashIdx !== -1) {
           monthlyContributions[cashIdx] += divertedLisaAmount;
-          divertedLisaAmount = 0;
         }
       }
     }
 
-    // 3. Apply growth and contributions to all buckets
+    // 3. Apply growth and update balances
     bucketStates.forEach((b, idx) => {
-      const monthlyRate = clampNumber(b.annualRate) / 100 / 12;
-      const contrib = monthlyContributions[idx];
+      if (b.isWithdrawn) return;
+
+      const settings = drawdownSettings[b.id] || {};
+      const effectiveWithdrawAge = settings.useWithdrawAge ? settings.withdrawAge : b.startWithdrawalAge;
+      const effectiveStopAge = settings.useStopAge ? settings.stopAge : b.stopContributingAge;
+
+      // Check if withdrawn this month
+      if (effectiveWithdrawAge && ageAtMonth >= effectiveWithdrawAge) {
+        b.withdrawnValue = b.currentBalance;
+        b.isWithdrawn = true;
+        // Balance technically becomes 0 as it's "spent" or moved to income
+        b.currentBalance = 0;
+        return;
+      }
+
+      // Determine growth rate (annualRate until stopAge, then inflationRate)
+      const hasStopped = (effectiveStopAge && ageAtMonth >= effectiveStopAge);
+      const annualGrowthRate = hasStopped ? inflationRate : clampNumber(b.annualRate);
+      const monthlyRate = annualGrowthRate / 100 / 12;
       
+      const contrib = monthlyContributions[idx];
       b.currentBalance = (b.currentBalance * (1 + monthlyRate)) + contrib;
       b.totalContributed += contrib;
     });
@@ -388,7 +424,11 @@ export function projectSavings(buckets: SavingsBucket[], years: number, birthYea
 
   return bucketStates.map(b => ({
     ...b,
-    projected: b.currentBalance,
+    // 'projected' is the balance at the END of the accumulation period (retirement)
+    // If it was withdrawn early, it's 0. If it's withdrawn EXACTLY at retirement, we show the balance before withdrawal.
+    projected: b.isWithdrawn ? 0 : b.currentBalance,
+    withdrawnValue: b.isWithdrawn ? b.withdrawnValue : 0,
+    finalBalance: b.isWithdrawn ? b.withdrawnValue : b.currentBalance, // Helper for chart start
     contributed: b.totalContributed,
   }));
 }
