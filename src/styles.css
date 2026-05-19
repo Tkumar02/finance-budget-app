@@ -605,6 +605,10 @@ h2 {
   grid-template-columns: minmax(160px, 1.3fr) repeat(5, minmax(100px, 1fr)) 44px;
 }
 
+.retirement-table .table-row {
+  grid-template-columns: minmax(160px, 1.2fr) repeat(4, minmax(110px, 1fr));
+}
+
 .savings-row-wrapper {
   display: grid;
   gap: 8px;
@@ -914,7 +918,8 @@ h2 {
 
   @media (max-width: 768px) {
   /* Force the table row to be a single column block */
-  .savings-table .table-row {
+  .savings-table .table-row,
+  .retirement-table .table-row {
     display: flex !important;
     flex-direction: column !important;
     gap: 8px !important;
@@ -926,12 +931,14 @@ h2 {
   }
 
   /* Hide the header row on mobile - it makes no sense in a stack */
-  .savings-table .table-row.header {
+  .savings-table .table-row.header,
+  .retirement-table .table-row.header {
     display: none !important;
   }
 
   /* Make every cell take full width */
-  .savings-table .table-row > div {
+  .savings-table .table-row > div,
+  .retirement-table .table-row > div {
     width: 100% !important;
     display: flex;
     justify-content: space-between;
@@ -949,7 +956,10 @@ h2 {
   /* Adjust inputs to fit the side of the label */
   .savings-table input, 
   .savings-table select, 
-  .savings-table .number-field {
+  .savings-table .number-field,
+  .retirement-table input, 
+  .retirement-table select, 
+  .retirement-table .number-field {
     width: 60% !important;
   }
 
