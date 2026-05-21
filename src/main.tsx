@@ -507,27 +507,8 @@ function App() {
   );
 
 const projectionBuckets = useMemo(() => {
-    // 1. Separate standard and public sector contributions
-    const standardEmployerMonthly = paye.filter(j => (j.pensionType || 'standard') === 'standard').reduce((sum, job) => {
-      const monthly = (job.gross * (job.employerPensionContribution || 0)) / 1200;
-      return sum + monthly;
-    }, 0);
-
-    const standardEmployeeMonthly = paye.filter(j => (j.pensionType || 'standard') === 'standard').reduce((sum, job) => {
-      return sum + (job.gross * (job.pensionRate || 0)) / 1200;
-    }, 0);
-
-    return savings.map((bucket) => {
-      if (bucket.type === "workplace-private-pension") {
-        return { 
-          ...bucket, 
-          monthly: bucket.monthly + standardEmployeeMonthly + standardEmployerMonthly
-        };
-      }
-      // DB Pensions are Defined Benefit; contributions don't build a 'pot balance'
-      return bucket;
-    });
-  }, [savings, paye]);
+    return savings;
+  }, [savings]);
   const budget = useMemo(
     () => budgetSummary(tax.monthlyNet, budgetLines, annualBills, savingsForBudget, mortgage.monthlyOverpayment),
     [tax.monthlyNet, budgetLines, annualBills, savingsForBudget, mortgage.monthlyOverpayment],
@@ -551,7 +532,13 @@ const projectionBuckets = useMemo(() => {
 );
   const mortgageSummary = useMemo(() => calculateMortgage(mortgage), [mortgage]);
   const targetGross = useMemo(
-    () => requiredGrossForNet(Math.max(0, budget.monthlyOut * 12), taxSettings.taxCode, taxSettings.region),
+    () => requiredGrossForNet(
+      Math.max(0, budget.monthlyOut * 12), 
+      taxSettings.taxCode, 
+      taxSettings.region,
+      taxSettings.includeStudentLoan,
+      taxSettings.pensionRate
+    ),
     [budget.monthlyOut, taxSettings],
   );
   const projectedTotal = projectedSavings.reduce((sum, bucket) => {
@@ -568,6 +555,17 @@ const projectionBuckets = useMemo(() => {
     if (['nhs-pension', 'civil-service-pension', 'teachers-pension'].includes(type)) return age >= (startWithdrawalAge || 67);
     return true;
   };
+
+  const accessibleProjectedTotal = useMemo(() => {
+    return projectedSavings.reduce((sum, bucket) => {
+      if (bucket.isHidden) return sum;
+      // We check accessibility at the END of the projection (retirementAge)
+      if (isBucketAccessible(bucket.type, retirementAge)) {
+        return sum + bucket.projected;
+      }
+      return sum;
+    }, 0);
+  }, [projectedSavings, retirementAge, isBucketAccessible]);
 
   const nhsJobsGross = useMemo(() => {
     return paye.filter(j => j.pensionType === 'nhs').reduce((sum, j) => sum + j.gross, 0);
@@ -705,10 +703,16 @@ const projectionBuckets = useMemo(() => {
     { id: "overview", title: "Overview", value: monthlyMoney.format(overviewBudget.monthlySurplus), detail: "monthly surplus" },
     { id: "income", title: "Income", value: money.format(tax.payeGross + tax.selfProfit), detail: "gross + profit" },
     { id: "budget", title: "Budget", value: monthlyMoney.format(overviewBudget.monthlyOut), detail: "monthly outflow" },
-    { id: "savings", title: "Savings", value: money.format(projectedTotal), detail: `${projectionYears.toFixed(2)} year projection` },
+    { 
+      id: "savings", 
+      title: "Savings", 
+      value: money.format(projectedTotal), 
+      subValue: "accessible",
+      detail: money.format(accessibleProjectedTotal),
+    },
     { id: "mortgage", title: "Mortgage", value: `${mortgageSummary.payoffYears.toFixed(1)} yrs`, detail: "payoff estimate" },
-    { id: "retirement", title: "Retirement", value: monthlyMoney.format(retirementSummary.monthlyIn), detail: "post-work income" },
-  ] satisfies { id: SectionId; title: string; value: string; detail: string }[];
+    { id: "retirement", title: "Retirement", value: monthlyMoney.format(retirementSummary.monthlyIn), detail: `${projectionYears.toFixed(2)} year projection`},
+  ] satisfies { id: SectionId; title: string; value: string; detail: string; subValue?: string; subLabel?: string }[];
 
   if (authLoading) return <div className="loading-screen">Loading application...</div>;
   if (!user) return <AuthScreen />;
@@ -779,7 +783,14 @@ const projectionBuckets = useMemo(() => {
             >
               <span>{section.title}</span>
               <strong>{section.value}</strong>
-              <small>{section.detail}</small>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                <small>{section.detail}</small>
+                {section.subValue && (
+                  <small style={{ color: '#24594f', fontWeight: 800 }}>
+                    {section.subValue} <span style={{ fontWeight: 400, fontSize: '0.7rem', color: '#666' }}></span>
+                  </small>
+                )}
+              </div>
             </button>
           ))}
       </nav>
@@ -798,16 +809,17 @@ const projectionBuckets = useMemo(() => {
       ) : null}
 
       {activeSection === "overview" ? (
-        <OverviewSection
-          budget={overviewBudget}
-          tax={tax}
-          targetGross={targetGross}
-          sippNetContribution={totalSippNet}
-          taxSetAside={monthlyTaxSetAside}
-          setActiveSection={setActiveSection}
-        />
+       <OverviewSection
+         budget={overviewBudget}
+         tax={tax}
+         targetGross={targetGross}
+         sippNetContribution={totalSippNet}
+         taxSetAside={monthlyTaxSetAside}
+         setActiveSection={setActiveSection}
+         taxSettings={taxSettings}
+         setTaxSettings={setTaxSettings}
+       />
       ) : null}
-
       {activeSection === "income" ? (
         <IncomeSection
           paye={paye} setPaye={setPaye}
@@ -844,9 +856,9 @@ const projectionBuckets = useMemo(() => {
             nhsJobsGross={nhsJobsGross}
             civilServiceJobsGross={civilServiceJobsGross}
             teachersJobsGross={teachersJobsGross}
+            drawdownSettings={drawdownSettings}
           />
       ) : null}
-
       {activeSection === "mortgage" ? (
         <MortgageSection mortgage={mortgage} setMortgage={setMortgage} mortgageSummary={mortgageSummary} />
       ) : null}
@@ -857,8 +869,8 @@ const projectionBuckets = useMemo(() => {
           setRetirementAge={(targetAge: number) => setProjectionYears(Math.max(0, targetAge - currentAge))}
           outgoings={expectedOutgoings} setOutgoings={setExpectedOutgoings}
           budgetExpenses={budget.monthlyExpenses}
-          otherIncome={otherRetirementIncome} setOtherIncome={setOtherRetirementIncome}
-          summary={retirementSummary}
+          monthlySurplus={budget.monthlySurplus}
+          otherIncome={otherRetirementIncome} setOtherIncome={setOtherRetirementIncome}          summary={retirementSummary}
           projectedSavings={projectedSavings}
           drawdownSettings={drawdownSettings}
           setDrawdownSettings={setDrawdownSettings}
@@ -893,31 +905,32 @@ const projectionBuckets = useMemo(() => {
   );
 }
 
-function RetirementSection({ 
-  birthYear, 
-  setBirthYear, 
-  retirementAge, 
-  setRetirementAge, 
-  outgoings, 
-  setOutgoings, 
-  budgetExpenses, 
-  otherIncome, 
-  setOtherIncome, 
-  summary, 
-  projectedSavings, 
-  drawdownSettings, 
-  setDrawdownSettings, 
-  isBucketAccessible, 
-  pensionAccessAge, 
-  projectionYears, 
-  setProjectionYears, 
-  inflationRate, 
-  setInflationRate, 
-  budgetLines, 
-  setBudgetLines, 
-  annualBills, 
-  setAnnualBills, 
-  additionalExpenses, 
+function RetirementSection({
+  birthYear,
+  setBirthYear,
+  retirementAge,
+  setRetirementAge,
+  outgoings,
+  setOutgoings,
+  budgetExpenses,
+  monthlySurplus,
+  otherIncome,
+  setOtherIncome,
+  summary,
+  projectedSavings,
+  drawdownSettings,
+  setDrawdownSettings,
+  isBucketAccessible,
+  pensionAccessAge,
+  projectionYears,
+  setProjectionYears,
+  inflationRate,
+  setInflationRate,
+  budgetLines,
+  setBudgetLines,
+  annualBills,
+  setAnnualBills,
+  additionalExpenses,
   setAdditionalExpenses,
   taxableFraction,
   setTaxableFraction,
@@ -939,12 +952,12 @@ function RetirementSection({
   outgoings: number;
   setOutgoings: (o: number) => void;
   budgetExpenses: number;
+  monthlySurplus: number;
   otherIncome: (ExpenseLine & { isTaxable?: boolean })[];
   setOtherIncome: React.Dispatch<React.SetStateAction<(ExpenseLine & { isTaxable?: boolean })[]>>;
   summary: any;
   projectedSavings: any[];
-  drawdownSettings: any;
-  setDrawdownSettings: (s: any) => void;
+  drawdownSettings: any;  setDrawdownSettings: (s: any) => void;
   isBucketAccessible: (type: string, age: number) => boolean;
   pensionAccessAge: number;
   projectionYears: number;
@@ -1178,26 +1191,32 @@ function RetirementSection({
                       onClick={async () => {
                         setIsAnalyzing(true);
                         setAnalysisResult(null);
-                        const snapshot = getFinancialSnapshot(birthYear, birthMonth, retirementAge, budgetExpenses, mortgageSummary, mortgage, projectedSavings, otherIncome);
+                        const snapshot = getFinancialSnapshot(birthYear, birthMonth, retirementAge, budgetExpenses, monthlySurplus, mortgageSummary, mortgage, projectedSavings, otherIncome);
 
                         try {
                           const model = getGenerativeModel(ai, { model: 'gemini-2.5-flash' });
                           const prompt = `
-                            You are a senior UK retirement strategist. Perform a detailed, pot-by-pot retirement timeline analysis based on the provided financial snapshot.
+                            You are a senior UK retirement strategist. Perform a detailed retirement timeline analysis based on the provided financial snapshot.
 
-                            1. **Earliest Retirement Age**: Identify the earliest age the user can feasibly retire. If their current retirement age is not the earliest possible, determine and state the earliest feasible age.
-                            2. **Retirement Timeline & Bridge Strategy**: Create a step-by-step timeline explaining how to fund retirement expenses. 
-                               - Explain the sequence of pot drawdowns: E.g., "From age 53 to 57, drawdown from your ISA pot. At 57, switch to private pension. At 67, state/DB pension kicks in."
-                               - Detail how each pot covers the shortfall until the next one activates.
-                            3. **Sustainability**: Evaluate if this sequence lasts for their remaining life.
-                            4. **Mortgage & Efficiency**: Confirm mortgage status at that retirement age and provide one actionable UK tax/pension tip (e.g., Personal Allowance, SIPP relief, LISA rules).
+                            Your primary goals:
+                            1. **Earliest Retirement Age**: Determine the absolute earliest age the user can retire. To do this, analyze:
+                               - Drawdown pots (ISAs, SIPPs, etc.) and their projected growth.
+                               - Retirement expenses and additional expenses.
+                               - Guaranteed income: State Pension, NHS/Teachers/Civil Service pensions, and other income streams.
+                               - The required drawdown rate (currently ${drawdownRate}%).
+                            2. **Savings Strategy**: Analyze their current monthly surplus of ${money.format(monthlySurplus)}. 
+                               - Suggest how investing this surplus (e.g., into a SIPP for tax relief or a Stocks & Shares ISA for accessibility) could accelerate their retirement.
+                               - Provide a specific "What if" scenario (e.g., "If you invest £100/mo of your surplus into an ISA at 6% growth...").
+                            3. **Retirement Timeline & Bridge Strategy**: Create a step-by-step timeline explaining how to fund retirement expenses. 
+                               - Explain the sequence of pot drawdowns (e.g., Bridge from ISA until Pension access, then State Pension).
+                            4. **Mortgage Influence**: ${mortgage.amount > 0 ? `The user has a mortgage. Confirm if it is paid off by your proposed retirement age and how the ${money.format(mortgageSummary.standardPayment)}/mo payment (and any overpayments) affects their strategy.` : "The user has no mortgage information provided; do not mention mortgages."}
 
                             Snapshot Data: ${JSON.stringify(snapshot)}
 
                             Rules: 
                             - Use **bold** for all currency and age figures.
-                            - Be specific, analytical, and structured in a timeline format.
-                            - Do not use generic summary filler.
+                            - Be specific, analytical, and encouraging.
+                            - Focus on the "Earliest Possible" scenario vs the "Current Plan".
                           `;
 
                           const result = await model.generateContent(prompt);
@@ -1334,7 +1353,7 @@ function RetirementSection({
                           onChange={(e) => setDrawdownSettings({...drawdownSettings, [bucket.id]: {...settings, useStopAge: e.target.checked}})} 
                         />
                         {settings.useStopAge && (
-                          <div style={{ width: '60px' }}>
+                          <div className="age-input-container" style={{ width: '60px' }}>
                             <NumberInput value={settings.stopAge} onChange={(val) => setDrawdownSettings({...drawdownSettings, [bucket.id]: {...settings, stopAge: val}})} />
                           </div>
                         )}
@@ -1349,7 +1368,7 @@ function RetirementSection({
                           onChange={(e) => setDrawdownSettings({...drawdownSettings, [bucket.id]: {...settings, useWithdrawAge: e.target.checked}})} 
                         />
                         {settings.useWithdrawAge && (
-                          <div style={{ width: '60px' }}>
+                          <div className="age-input-container" style={{ width: '60px' }}>
                             <NumberInput value={settings.withdrawAge} onChange={(val) => setDrawdownSettings({...drawdownSettings, [bucket.id]: {...settings, withdrawAge: val}})} />
                           </div>
                         )}
@@ -1457,6 +1476,8 @@ function OverviewSection({
   sippNetContribution,
   taxSetAside,
   setActiveSection,
+  taxSettings,
+  setTaxSettings,
 }: {
   budget: any;
   tax: ReturnType<typeof calculateTaxSummary>;
@@ -1464,7 +1485,11 @@ function OverviewSection({
   sippNetContribution: number;
   taxSetAside: number;
   setActiveSection: (section: SectionId) => void;
+  taxSettings: TaxSettings;
+  setTaxSettings: (s: TaxSettings) => void;
 }) {
+  const [showPensionInput, setShowPensionInput] = useState(!!taxSettings.pensionRate);
+
   return (
     <div className="workspace overview-workspace">
       <section className="panel span-8">
@@ -1479,6 +1504,48 @@ function OverviewSection({
             ["Gross income needed for current plan", targetGross],
           ]}
         />
+        
+        <div className="calculation-settings" style={{ marginTop: '20px', padding: '16px', backgroundColor: '#f9fafb', borderRadius: '8px', border: '1px solid #e5e7eb' }}>
+          <h4 style={{ margin: '0 0 12px 0', fontSize: '0.9rem', color: '#374151' }}>Calculation Options</h4>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '20px', alignItems: 'center' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.85rem', cursor: 'pointer' }}>
+              <input 
+                type="checkbox" 
+                checked={taxSettings.includeStudentLoan} 
+                onChange={(e) => setTaxSettings({ ...taxSettings, includeStudentLoan: e.target.checked })}
+              />
+              Include Student Loan (Plan 2)
+            </label>
+            
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.85rem', cursor: 'pointer' }}>
+                <input 
+                  type="checkbox" 
+                  checked={showPensionInput} 
+                  onChange={(e) => {
+                    setShowPensionInput(e.target.checked);
+                    if (!e.target.checked) setTaxSettings({ ...taxSettings, pensionRate: 0 });
+                  }}
+                />
+                Include Pension Deduction
+              </label>
+              
+              {showPensionInput && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                  <NumberInput 
+                    value={taxSettings.pensionRate || 0} 
+                    onChange={(v) => setTaxSettings({ ...taxSettings, pensionRate: v })}
+                    suffix="%"
+                  />
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        <div style={{ marginTop: '16px', fontSize: '0.85rem', color: '#666', borderTop: '1px solid #eee', paddingTop: '12px' }}>
+          <p><strong>Note:</strong> Gross income calculation includes Income Tax and National Insurance deductions, plus any optional deductions selected above.</p>
+        </div>
       </section>
       <section className="panel span-4">
         <h2>SIPP threshold check</h2>
@@ -2027,6 +2094,7 @@ function BudgetSection({
 function SavingsSection({
   savings, setSavings, projectionYears, setProjectionYears, projectedSavings, projectedTotal, allProjectedTotal,
   employmentPensionMonthly, employerPensionMonthly, nhsJobsGross, civilServiceJobsGross, teachersJobsGross,
+  drawdownSettings,
 }: any) {
   const refs = useMemo(() => savings.reduce((acc: any, b: any) => ({ ...acc, [b.id]: React.createRef<HTMLDivElement>() }), {}), [savings]);
   return (
@@ -2122,13 +2190,17 @@ function SavingsSection({
                 }} style={{ cursor: "pointer" }}>
                 <div style={{ minWidth: "150px", display: "flex", flexDirection: "column" }}>
                   <strong>{bucket.label}</strong>
-                  {isWithdrawn && <small style={{ color: "#a7332f", fontSize: "0.65rem", fontWeight: 800 }}>WITHDRAWN</small>}
+                  {bucket.projected <= 0 && bucket.isWithdrawn && (
+                    <small style={{ color: "#a7332f", fontSize: "0.65rem", fontWeight: 800 }}>WITHDRAWN (EMPTY)</small>
+                  )}
+                  {bucket.projected > 0 && bucket.isWithdrawn && (
+                    <small style={{ color: "#a26013", fontSize: "0.65rem", fontWeight: 800 }}>WITHDRAWING ({drawdownSettings[bucket.id]?.rate || 4}% rate)</small>
+                  )}
                 </div>
-                <div className="bar-track" style={{ flex: 1, margin: "0 20px", borderStyle: isWithdrawn ? "dashed" : "solid", opacity: isWithdrawn ? 0.5 : 1 }}>
-                  <div style={{ width: `${Math.max(2, (displayValue / Math.max(1, allProjectedTotal)) * 100)}%`, background: isWithdrawn ? "#cbd5e0" : undefined }} />
+                <div className="bar-track" style={{ flex: 1, margin: "0 20px", borderStyle: bucket.isWithdrawn ? "dashed" : "solid", opacity: bucket.isWithdrawn ? 0.7 : 1 }}>
+                  <div style={{ width: `${Math.max(2, (displayValue / Math.max(1, allProjectedTotal)) * 100)}%`, background: bucket.isWithdrawn && bucket.projected <= 0 ? "#cbd5e0" : undefined }} />
                 </div>
-                <b style={{ minWidth: "100px", textAlign: "right", opacity: isWithdrawn ? 0.5 : 1 }}>{money.format(displayValue)}</b>
-              </div>
+                <b style={{ minWidth: "100px", textAlign: "right", opacity: bucket.projected <= 0 ? 0.5 : 1 }}>{money.format(displayValue)}</b>              </div>
             );
           })}
         </div>
@@ -2196,39 +2268,36 @@ function DepletionChart({ projectedSavings, drawdownSettings, retirementAge, pen
       // Therefore, growth is always at the economy-wide Inflation Rate (safe haven assets).
       const r = (inflationRate || 3) / 100; 
       const startingBalance = bucket.finalBalance || 0;
-      
-      let balance; 
-      
-      // If we are past the manual withdrawal age, the balance is gone (already fully withdrawn)
-      const manualWithdrawAge = settings.useWithdrawAge ? settings.withdrawAge : null;
-      const fullyWithdrawnAlready = manualWithdrawAge && age > manualWithdrawAge;
 
-      if (fullyWithdrawnAlready) {
-        balance = 0;
-      } else if (!isAccessible(bucket, age, settings)) { 
+      let balance;
+
+      if (!isAccessible(bucket, age, settings)) {
         // Pot is still growing until withdrawal age
-        balance = startingBalance * Math.pow(1 + r, year); 
-      } else { 
+        // If retirement age is 60 but withdrawal is at 65, it grows for those 5 years
+        const growthYears = Math.max(0, age - retirementAge);
+        balance = startingBalance * Math.pow(1 + r, growthYears);
+      } else {
         // Pot is in drawdown
         // 1. Calculate how many years it's been in drawdown
-        // If withdrawal age was in the future, it only starts depleting then.
-        // For simplicity, we calculate the balance at 'year' assuming drawdown started at 'retirementAge' OR 'withdrawAge'
-        const drawdownStartAge = settings.useWithdrawAge ? settings.withdrawAge : retirementAge;
-        const yearsInDrawdown = Math.max(0, (retirementAge + year) - drawdownStartAge);
-        
-        const d = startingBalance * (settings.rate / 100); 
+        const drawdownStartAge = settings.useWithdrawAge ? settings.withdrawAge : (bucket.startWithdrawalAge || retirementAge);
+        const yearsInDrawdown = Math.max(0, age - drawdownStartAge);
+
+        // 2. Growth until drawdown starts
+        const yearsUntilDrawdown = Math.max(0, drawdownStartAge - retirementAge);
+        const balanceAtDrawdownStart = startingBalance * Math.pow(1 + r, yearsUntilDrawdown);
+
+        const d = balanceAtDrawdownStart * (settings.rate / 100); 
         if (r === 0) { 
-          balance = startingBalance - d * yearsInDrawdown; 
+          balance = balanceAtDrawdownStart - d * yearsInDrawdown; 
         } else { 
           // Standard drawdown formula: P(1+r)^t - (d/r)((1+r)^t - 1)
-          balance = startingBalance * Math.pow(1 + r, yearsInDrawdown) - (d / r) * (Math.pow(1 + r, yearsInDrawdown) - 1); 
+          balance = balanceAtDrawdownStart * Math.pow(1 + r, yearsInDrawdown) - (d / r) * (Math.pow(1 + r, yearsInDrawdown) - 1); 
         } 
       } 
       return { label: bucket.label, value: Math.max(0, balance) }; 
-    }); 
-    return { year, age, buckets }; 
-  }); 
-  
+      }); 
+      return { year, age, buckets }; 
+      }); 
   if (data[0].buckets.length === 0) return null; 
   return (
     <div className='depletion-chart' style={{ marginTop: '24px' }}>

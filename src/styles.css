@@ -941,8 +941,9 @@ h2 {
   .retirement-table .table-row > div {
     width: 100% !important;
     display: flex;
-    justify-content: space-between;
-    align-items: center;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
   }
 
   /* Show the labels we added in the JSX (the "mobile-label" divs) */
@@ -959,8 +960,17 @@ h2 {
   .savings-table .number-field,
   .retirement-table input, 
   .retirement-table select, 
-  .retirement-table .number-field {
-    width: 60% !important;
+  .retirement-table .number-field,
+  .retirement-table .number-field input {
+    width: 100% !important;
+  }
+
+  .retirement-table .table-row div > div {
+    width: 100%;
+  }
+
+  .age-input-container {
+    width: 100% !important;
   }
 
   /* Move delete button to top right of the card */

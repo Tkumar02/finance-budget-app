@@ -60,6 +60,8 @@ export type TaxSettings = {
   taxCode: string;
   region: Region;
   sippNetContribution: number;
+  includeStudentLoan?: boolean;
+  pensionRate?: number;
 };
 
 export const money = new Intl.NumberFormat("en-GB", {
@@ -113,7 +115,10 @@ export function employmentPension(incomes: PayeIncome[]) {
 }
 
 export function employerPensionContributions(incomes: PayeIncome[]) {
-  return incomes.reduce((sum, income) => sum + clampNumber(income.employerPensionContribution), 0);
+  return incomes.reduce(
+    (sum, income) => sum + (clampNumber(income.gross) * (clampNumber(income.employerPensionContribution) / 100)),
+    0,
+  );
 }
 
 export function selfEmploymentProfit(streams: SelfEmployment[]) {
@@ -396,39 +401,41 @@ export function projectSavings(buckets: SavingsBucket[], years: number, birthYea
 
     // 3. Apply growth and update balances
     bucketStates.forEach((b, idx) => {
-      if (b.isWithdrawn) return;
-
       const settings = drawdownSettings[b.id] || {};
       const effectiveWithdrawAge = settings.useWithdrawAge ? settings.withdrawAge : b.startWithdrawalAge;
       const effectiveStopAge = settings.useStopAge ? settings.stopAge : b.stopContributingAge;
 
-      // Check if withdrawn this month
-      if (effectiveWithdrawAge && ageAtMonth >= effectiveWithdrawAge) {
-        b.withdrawnValue = b.currentBalance;
-        b.isWithdrawn = true;
-        // Balance technically becomes 0 as it's "spent" or moved to income
-        b.currentBalance = 0;
-        return;
-      }
-
-      // Determine growth rate (annualRate until stopAge, then inflationRate)
-      const hasStopped = (effectiveStopAge && ageAtMonth >= effectiveStopAge);
+      const isWithdrawing = effectiveWithdrawAge && ageAtMonth >= effectiveWithdrawAge;
+      const hasStopped = (effectiveStopAge && ageAtMonth >= effectiveStopAge) || isWithdrawing;
+      
       const annualGrowthRate = hasStopped ? inflationRate : clampNumber(b.annualRate);
       const monthlyRate = annualGrowthRate / 100 / 12;
       
-      const contrib = monthlyContributions[idx];
-      b.currentBalance = (b.currentBalance * (1 + monthlyRate)) + contrib;
-      b.totalContributed += contrib;
+      if (isWithdrawing) {
+        // Pot is in drawdown
+        if (b.currentBalance > 0) {
+          b.isWithdrawn = true; // Mark as started withdrawal
+          const annualDrawdownAmount = b.currentBalance * (settings.rate / 100);
+          const monthlyDrawdown = annualDrawdownAmount / 12;
+          
+          // Growth then withdrawal
+          b.currentBalance = (b.currentBalance * (1 + monthlyRate)) - monthlyDrawdown;
+          if (b.currentBalance < 0) b.currentBalance = 0;
+        }
+      } else {
+        // Normal accumulation
+        const contrib = monthlyContributions[idx];
+        b.currentBalance = (b.currentBalance * (1 + monthlyRate)) + contrib;
+        b.totalContributed += contrib;
+      }
     });
   }
 
   return bucketStates.map(b => ({
     ...b,
-    // 'projected' is the balance at the END of the accumulation period (retirement)
-    // If it was withdrawn early, it's 0. If it's withdrawn EXACTLY at retirement, we show the balance before withdrawal.
-    projected: b.isWithdrawn ? 0 : b.currentBalance,
-    withdrawnValue: b.isWithdrawn ? b.withdrawnValue : 0,
-    finalBalance: b.isWithdrawn ? b.withdrawnValue : b.currentBalance, // Helper for chart start
+    // 'projected' is the balance at the end of the projectionYears
+    projected: b.currentBalance,
+    finalBalance: b.currentBalance,
     contributed: b.totalContributed,
   }));
 }
@@ -502,6 +509,7 @@ export type FinancialSnapshot = {
   profile: { currentAge: number; retirementAge: number };
   financialHealth: {
     monthlyExpenses: number;
+    monthlySurplus: number;
     mortgage: { 
       remaining: number; 
       monthlyPayment: number; 
@@ -529,6 +537,7 @@ export function getFinancialSnapshot(
   birthMonth: number,
   retirementAge: number,
   budgetExpenses: number,
+  monthlySurplus: number,
   mortgageSummary: any,
   mortgageInputs: MortgageInputs,
   savings: any[],
@@ -537,7 +546,7 @@ export function getFinancialSnapshot(
   const currentYear = new Date().getFullYear();
   const currentMonth = new Date().getMonth() + 1;
   const currentAge = (currentYear - birthYear) + (currentMonth - birthMonth) / 12;
-  
+
   const monthsUntilRetirement = (retirementAge - currentAge) * 12;
   const willBePaidOffAtRetirement = mortgageSummary.payoffMonths <= monthsUntilRetirement;
   const ageAtPayoff = currentAge + (mortgageSummary.payoffMonths / 12);
@@ -546,6 +555,7 @@ export function getFinancialSnapshot(
     profile: { currentAge, retirementAge },
     financialHealth: {
       monthlyExpenses: budgetExpenses,
+      monthlySurplus: monthlySurplus,
       mortgage: {
         remaining: mortgageInputs.amount,
         monthlyPayment: mortgageSummary.standardPayment,
@@ -568,7 +578,6 @@ export function getFinancialSnapshot(
     }))
   };
 }
-
 export function calculateRetirementGrossRequired(
   targetNetFromPots: number,
   taxableFraction: number,
@@ -607,23 +616,27 @@ export function calculateRetirementGrossRequired(
   };
 }
 
-export function requiredGrossForNet(targetNet: number, taxCode: string, region: Region) {
+export function requiredGrossForNet(targetNet: number, taxCode: string, region: Region, includeStudentLoan = false, pensionRate = 0) {
   let low = 0;
   let high = Math.max(50000, targetNet * 3); // Increased multiplier for more headroom with deductions
   for (let i = 0; i < 60; i += 1) {
     const mid = (low + high) / 2;
     
-    // Assume a conservative 15% pension contribution as requested
-    const pensionRate = 0.15;
-    const pensionContribution = mid * pensionRate;
-    
-    // Most workplace pensions (Net Pay) reduce taxable income but not NI income
-    const taxableIncome = Math.max(0, mid - pensionContribution);
+    // Pension deduction (assumed Net Pay arrangement: reduces taxable income, not NI)
+    const pensionAmount = mid * (pensionRate / 100);
+    const taxableIncome = Math.max(0, mid - pensionAmount);
     
     const tax = calculateIncomeTax(taxableIncome, taxCode, 0, region).totalTax;
     const ni = calculateNationalInsurance(mid, "class1");
     
-    const net = mid - tax - ni - pensionContribution;
+    // Student Loan (Plan 2 / Plan 5 style approximation: 9% over ~£25k-£27k)
+    let studentLoan = 0;
+    if (includeStudentLoan) {
+      const threshold = 27295; // Plan 2 threshold for 2024/25
+      studentLoan = Math.max(0, (mid - threshold) * 0.09);
+    }
+    
+    const net = mid - tax - ni - pensionAmount - studentLoan;
     
     if (net < targetNet) low = mid;
     else high = mid;
