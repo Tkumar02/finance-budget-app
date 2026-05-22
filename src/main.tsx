@@ -36,6 +36,7 @@ import {
   TaxSettings,
   budgetSummary,
   calculateIncomeTax,
+  calculateNationalInsurance,
   calculateMortgage,
   calculateTaxSummary,
   clampNumber,
@@ -654,9 +655,13 @@ const projectionBuckets = useMemo(() => {
     });
 
     otherRetirementIncome.forEach(item => {
-      totalAnnualGross += item.amount * 12;
-      if (item.isTaxable) {
-        totalAnnualTaxable += item.amount * 12;
+      // Only include income if retirement age is >= startAge (if specified)
+      const startAge = item.startAge || 0;
+      if (retirementAge >= startAge) {
+        totalAnnualGross += item.amount * 12;
+        if (item.isTaxable) {
+          totalAnnualTaxable += item.amount * 12;
+        }
       }
     });
 
@@ -875,6 +880,9 @@ const projectionBuckets = useMemo(() => {
           drawdownSettings={drawdownSettings}
           setDrawdownSettings={setDrawdownSettings}
           isBucketAccessible={isBucketAccessible}
+          nhsJobsGross={nhsJobsGross}
+          civilServiceJobsGross={civilServiceJobsGross}
+          teachersJobsGross={teachersJobsGross}
           pensionAccessAge={pensionAccessAge}
           projectionYears={projectionYears}
           setProjectionYears={setProjectionYears}
@@ -921,6 +929,9 @@ function RetirementSection({
   drawdownSettings,
   setDrawdownSettings,
   isBucketAccessible,
+  nhsJobsGross,
+  civilServiceJobsGross,
+  teachersJobsGross,
   pensionAccessAge,
   projectionYears,
   setProjectionYears,
@@ -958,7 +969,10 @@ function RetirementSection({
   summary: any;
   projectedSavings: any[];
   drawdownSettings: any;  setDrawdownSettings: (s: any) => void;
-  isBucketAccessible: (type: string, age: number) => boolean;
+  isBucketAccessible: (type: string, age: number, startWithdrawalAge?: number) => boolean;
+  nhsJobsGross: number;
+  civilServiceJobsGross: number;
+  teachersJobsGross: number;
   pensionAccessAge: number;
   projectionYears: number;
   setProjectionYears: (y: number) => void;
@@ -986,24 +1000,71 @@ function RetirementSection({
   const hasActiveLisa = projectedSavings.some((b: any) => b.type === 'lisa' && (drawdownSettings[b.id]?.enabled ?? true));
 
   const targetGrossSummary = useMemo(() => {
-    // 1. Calculate Nominal Other Income Net
+    // 1. Calculate Nominal Other Income Net (including DB Pensions)
     let otherTaxable = 0;
     let otherGross = 0;
+    let hasDbPensions = false;
+
+    // A. Manual Other Income sources
     otherIncome.forEach(item => {
-      otherGross += item.amount * 12;
-      if (item.isTaxable) otherTaxable += item.amount * 12;
+      const startAge = item.startAge || 0;
+      if (retirementAge >= startAge) {
+        otherGross += item.amount * 12;
+        if (item.isTaxable) otherTaxable += item.amount * 12;
+      }
+    });
+
+    // B. Defined Benefit (DB) Pensions (NHS/Civil Service/Teachers)
+    projectedSavings.forEach((bucket) => {
+      if (['nhs-pension', 'civil-service-pension', 'teachers-pension'].includes(bucket.type)) {
+        const settings = drawdownSettings[bucket.id] || { rate: 4, lumpSumTaken: false, useStopAge: false, useWithdrawAge: false, stopAge: 60, withdrawAge: 60 };
+        const effectiveWithdrawAge = settings.useWithdrawAge ? settings.withdrawAge : (bucket.startWithdrawalAge || 67);
+        
+        // Only include if retirement age >= the age they start drawing this specific DB pension
+        if (isBucketAccessible(bucket.type, retirementAge, effectiveWithdrawAge)) {
+          hasDbPensions = true;
+          let salary = bucket.dbSalary || 0;
+          let baseYears = (bucket.dbYearsService || 0);
+          const effectiveStopAge = settings.useStopAge ? settings.stopAge : (bucket.stopContributingAge || 0);
+          const currentAgeVal = (new Date().getFullYear() - birthYear) + (new Date().getMonth() + 1 - birthMonth) / 12;
+          let yearsUntilStop = effectiveStopAge ? Math.max(0, effectiveStopAge - (birthYear + (currentAgeVal))) : projectionYears;
+          let yearsAtRetirement = baseYears + Math.min(projectionYears, yearsUntilStop);
+          let accrual = 54;
+
+          if (bucket.type === 'nhs-pension') {
+              salary = nhsJobsGross || bucket.nhsSalary || bucket.dbSalary || 0;
+              yearsAtRetirement = (bucket.nhsYearsService || bucket.dbYearsService || 0) + Math.min(projectionYears, yearsUntilStop);
+              const scheme = bucket.nhsScheme || bucket.dbScheme || "2015";
+              accrual = scheme === "1995" ? 80 : scheme === "2008" ? 60 : 54;
+          } else if (bucket.type === 'civil-service-pension') {
+              salary = civilServiceJobsGross || bucket.dbSalary || 0;
+              const scheme = bucket.dbScheme || "alpha";
+              accrual = scheme === "classic" ? 80 : (scheme === "premium" || scheme === "nuvos") ? 60 : 43.1;
+          } else if (bucket.type === 'teachers-pension') {
+              salary = teachersJobsGross || bucket.dbSalary || 0;
+              const scheme = bucket.dbScheme || "2015";
+              accrual = (scheme === "classic" || scheme === "80th") ? 80 : scheme === "60th" ? 60 : 57;
+          }
+
+          const annualDbIncome = (salary / accrual) * yearsAtRetirement;
+          otherGross += annualDbIncome;
+          otherTaxable += annualDbIncome; // DB pensions are 100% taxable
+        }
+      }
     });
     
     const otherTax = calculateIncomeTax(otherTaxable, taxSettings.taxCode, 0, taxSettings.region).totalTax;
     const otherNet = otherGross - otherTax;
     
-    // 2. Calculate the Gap to fund from pots
+    // 2. Calculate the Gap to fund from pots (now reduced by DB pensions)
     const totalTargetNet = summary.futureMonthlyExpenses * 12;
     const netGap = Math.max(0, totalTargetNet - otherNet);
     
+    const effectiveTaxableFraction = retirementAge >= pensionAccessAge ? taxableFraction : 0;
+
     const res = calculateRetirementGrossRequired(
       netGap,
-      taxableFraction,
+      effectiveTaxableFraction,
       taxSettings.taxCode,
       taxSettings.region,
       otherTaxable
@@ -1014,8 +1075,8 @@ function RetirementSection({
     const requiredPensionPot = res.grossPension / rateDecimal;
     const requiredIsaPot = res.netFromNonTaxable / rateDecimal;
     
-    return { ...res, requiredPensionPot, requiredIsaPot, otherNet, otherGross, otherTax, netGap, totalTargetNet };
-  }, [summary.futureMonthlyExpenses, taxableFraction, taxSettings, drawdownRate, otherIncome]);
+    return { ...res, requiredPensionPot, requiredIsaPot, otherNet, otherGross, otherTax, otherTaxable, netGap, totalTargetNet, hasDbPensions };
+  }, [summary.futureMonthlyExpenses, taxableFraction, taxSettings, drawdownRate, otherIncome, retirementAge, pensionAccessAge, projectedSavings, drawdownSettings, isBucketAccessible, birthYear, birthMonth, projectionYears, nhsJobsGross, civilServiceJobsGross, teachersJobsGross]);
 
   const actualProjectedTotals = useMemo(() => {
     let lisaPenaltyTotal = 0;
@@ -1030,7 +1091,7 @@ function RetirementSection({
         }
       }
 
-      if (['pension', 'workplace-private-pension', 'nhs-pension', 'civil-service-pension', 'teachers-pension'].includes(bucket.type)) {
+      if (['pension', 'workplace-private-pension'].includes(bucket.type)) {
         acc.pension += val;
       } else if (['isa', 'lisa', 'cash'].includes(bucket.type)) {
         acc.isaCash += val;
@@ -1041,8 +1102,60 @@ function RetirementSection({
     return { ...totals, lisaPenaltyTotal };
   }, [projectedSavings, retirementAge, showLisaUnder60]);
 
-  const pensionSurplus = actualProjectedTotals.pension - targetGrossSummary.requiredPensionPot;
-  const isaSurplus = actualProjectedTotals.isaCash - targetGrossSummary.requiredIsaPot;
+  const { pensionSurplus, isaSurplus, totalNetShortfall } = useMemo(() => {
+    const pSurplus = actualProjectedTotals.pension - targetGrossSummary.requiredPensionPot;
+    const iSurplus = actualProjectedTotals.isaCash - targetGrossSummary.requiredIsaPot;
+    
+    // Calculate the annual net shortfall based on this specific split.
+    // If a pot is short, we calculate the net income gap it creates.
+    
+    // Pension Gap: 25% tax-free, 75% taxable (assumed 20% basic rate for estimation)
+    const pGrossGap = Math.max(0, -pSurplus) * (drawdownRate / 100);
+    const pNetGap = (pGrossGap * 0.25) + (pGrossGap * 0.75 * 0.8); 
+    
+    // ISA Gap: 100% tax-free
+    const iNetGap = Math.max(0, -iSurplus) * (drawdownRate / 100);
+    
+    const monthlyNetShortfall = (pNetGap + iNetGap) / 12;
+
+    return { 
+      pensionSurplus: pSurplus, 
+      isaSurplus: iSurplus, 
+      totalNetShortfall: monthlyNetShortfall 
+    };
+  }, [actualProjectedTotals, targetGrossSummary, drawdownRate]);
+
+  const grossEarningsNeeded = useMemo(() => {
+    if (totalNetShortfall <= 0.01) return 0;
+    
+    // We need to find how much GROSS is required to get totalNetShortfall NET, 
+    // but we must account for the fact that we already have otherTaxable income 
+    // filling up the personal allowance and tax bands.
+    
+    const baselineTaxableAnnual = targetGrossSummary.otherTaxable || 0;
+    const targetNetAnnual = totalNetShortfall * 12;
+
+    // Solve for extra gross G such that:
+    // Net(baseline + G) - Net(baseline) = targetNetAnnual
+    const baselineNet = baselineTaxableAnnual - calculateIncomeTax(baselineTaxableAnnual, taxSettings.taxCode, 0, taxSettings.region).totalTax;
+    
+    let low = 0;
+    let high = Math.max(100000, targetNetAnnual * 3);
+    for (let i = 0; i < 60; i++) {
+      const mid = (low + high) / 2;
+      const totalTaxable = baselineTaxableAnnual + mid;
+      const tax = calculateIncomeTax(totalTaxable, taxSettings.taxCode, 0, taxSettings.region).totalTax;
+      const ni = calculateNationalInsurance(totalTaxable, "class1"); // NI usually only on EARNED income, but we'll include it for a conservative "earnings" estimate
+      
+      const currentNet = totalTaxable - tax - ni;
+      const extraNet = currentNet - baselineNet;
+
+      if (extraNet < targetNetAnnual) low = mid;
+      else high = mid;
+    }
+    
+    return high / 12;
+  }, [totalNetShortfall, targetGrossSummary.otherTaxable, taxSettings]);
 
   return (
     <div className="workspace">
@@ -1118,12 +1231,16 @@ function RetirementSection({
                   </button>
                 </h4>
                 {additionalExpenses.map((item: any) => (
-                  <div key={item.id} style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '8px 0', borderBottom: '1px solid #f9f9f9' }}>
-                    <input type="checkbox" checked readOnly style={{ opacity: 0.5 }} />
-                    <div style={{ flex: 1 }}>
+                  <div key={item.id} className="retirement-cost-row">
+                    <div className="checkbox-field">
+                      <input type="checkbox" checked readOnly style={{ opacity: 0.5 }} />
+                    </div>
+                    <div className="label-field">
+                      <div className="mobile-label">Cost Label</div>
                       <TextInput placeholder="e.g. Travel" value={item.label} onChange={(l) => setAdditionalExpenses(updateItem(additionalExpenses, item.id, { label: l }))} />
                     </div>
-                    <div style={{ width: '100px' }}>
+                    <div className="amount-field">
+                      <div className="mobile-label">Monthly Amount</div>
                       <NumberInput placeholder="0" value={item.amount} onChange={(a) => setAdditionalExpenses(updateItem(additionalExpenses, item.id, { amount: a }))} />
                     </div>
                     <button className="delete-btn" onClick={() => setAdditionalExpenses(additionalExpenses.filter((i: any) => i.id !== item.id))}>×</button>
@@ -1139,51 +1256,72 @@ function RetirementSection({
               ]} />
               
               <div style={{ marginTop: '16px', paddingTop: '16px', borderTop: '1px dashed #ccc' }}>
-                  <div className="funding-split-container" style={{ display: 'flex', alignItems: 'center', gap: '20px', marginBottom: '16px', flexWrap: 'wrap' }}>
-                    <span style={{ fontSize: '0.85rem', color: '#666', fontWeight: 600, minWidth: '90px' }}>Funding Split:</span>
-                    <div style={{ flex: '1 1 300px', display: 'flex', alignItems: 'center', gap: '12px' }}>
-                      <div style={{ flex: 1, position: 'relative' }}>
-                        <input 
-                          type="range" min="0" max="1" step="0.01" 
-                          className="split-slider"
-                          value={taxableFraction} 
-                          onChange={e => setTaxableFraction(Number(e.target.value))}
-                          style={{ '--split-percent': `${taxableFraction * 100}%` } as any}
-                        />
-                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.65rem', fontWeight: 800, marginTop: '4px' }}>
-                          <span className="pension-text">PENSION (TAXABLE)</span>
-                          <span className="isa-text">ISA / CASH (TAX FREE)</span>
+                  {retirementAge >= pensionAccessAge && (
+                    <>
+                      <div className="funding-split-container" style={{ display: 'flex', alignItems: 'center', gap: '20px', marginBottom: '16px', flexWrap: 'wrap' }}>
+                        <span style={{ fontSize: '0.85rem', color: '#666', fontWeight: 600, minWidth: '90px' }}>Funding Split:</span>
+                        <div style={{ flex: '1 1 300px', display: 'flex', alignItems: 'center', gap: '12px' }}>
+                          <div style={{ flex: 1, position: 'relative' }}>
+                            <input 
+                              type="range" min="0" max="1" step="0.01" 
+                              className="split-slider" 
+                              value={taxableFraction} 
+                              onChange={e => setTaxableFraction(Number(e.target.value))} 
+                              style={{ '--split-percent': `${taxableFraction * 100}%` } as any}
+                            />
+                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.65rem', fontWeight: 800, marginTop: '4px' }}>
+                              <span className="pension-text">PENSION (TAXABLE)</span>
+                              <span className="isa-text">ISA / CASH (TAX FREE)</span>
+                            </div>
+                          </div>
+                          <div style={{ width: '80px' }}>
+                            <NumberInput 
+                              value={Math.round(taxableFraction * 100)} 
+                              onChange={(v) => setTaxableFraction(clampNumber(v, 0) / 100)} 
+                              suffix="%" 
+                            />
+                          </div>
                         </div>
                       </div>
-                      <div style={{ width: '80px' }}>
-                        <NumberInput 
-                          value={Math.round(taxableFraction * 100)} 
-                          onChange={(v) => setTaxableFraction(clampNumber(v, 0) / 100)} 
-                          suffix="%" 
-                        />
+
+                      <div className="notice" style={{ maxWidth: 'none', fontSize: '0.75rem', marginBottom: '12px' }}>
+                        Taxable portion assumes 25% tax-free (Pension rules). Non-taxable assumes 0% tax (ISA/Cash).
                       </div>
-                    </div>
-                  </div>
-                  
-                  <div className="notice" style={{ maxWidth: 'none', fontSize: '0.75rem', marginBottom: '12px' }}>
-                    Taxable portion assumes 25% tax-free (Pension rules). Non-taxable assumes 0% tax (ISA/Cash).
-                  </div>
+                    </>
+                  )}
 
                   <ResultRows rows={[
                     ["Target Annual Net", targetGrossSummary.totalTargetNet],
-                    ["Other Income Net", -targetGrossSummary.otherNet],
-                    ["Net Gap to Fund", targetGrossSummary.netGap],
-                    ["Required Annual Gross Withdrawal", targetGrossSummary.totalGrossAnnual],
+                    [
+                      <span key="other-label" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        Other Income Net
+                        <span className="tooltip-trigger" data-tooltip={`Includes manual income sources${targetGrossSummary.hasDbPensions ? ' and your Defined Benefit pensions (NHS/CS/Teachers)' : ''} that reduce your funding gap.`}>
+                          ⓘ
+                        </span>
+                      </span> as any,
+                      -targetGrossSummary.otherNet
+                    ],
+                    [
+                      <span key="gap-label" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        Net Gap to Fund
+                        <span className="tooltip-trigger" data-tooltip={`To fund this ${money.format(targetGrossSummary.netGap)} gap at your chosen ${drawdownRate}% drawdown rate, the following pots are required.`}>
+                          ⓘ
+                        </span>
+                      </span> as any,
+                      targetGrossSummary.netGap
+                    ],
+                    [
+                      <span key="gross-label" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        Required Annual Gross Withdrawal
+                        <span className="tooltip-trigger" data-tooltip="The total gross amount you need to withdraw from your pots to reach your target net, after accounting for tax and any other income sources.">
+                          ⓘ
+                        </span>
+                      </span> as any, 
+                      targetGrossSummary.totalGrossAnnual
+                    ],
                     ["Estimated Annual Tax on Pots", -targetGrossSummary.totalAnnualTaxOnPots],
                   ]} />
-                  <div style={{ marginTop: '12px', fontSize: '0.75rem', color: '#888', fontStyle: 'italic' }}>
-                    * The <strong>Required Annual Gross Withdrawal</strong> accounts for your Other Income sources. It ensures you withdraw enough gross pension to reach your target net *after* combined tax is applied.
-                  </div>
                   
-                  <div style={{ marginTop: '12px', fontSize: '0.8rem', color: '#666' }}>
-                    To fund the <strong>{money.format(targetGrossSummary.netGap)}</strong> gap at a <strong>{drawdownRate}%</strong> drawdown rate:
-                  </div>
-
                   <div style={{ marginTop: '16px', paddingTop: '16px', borderTop: '1px dashed #ccc' }}>
                     <button 
                       className={`wide-action ${isAnalyzing ? 'loading' : ''}`}
@@ -1249,19 +1387,36 @@ function RetirementSection({
                           ))}
                         </div>
                       </div>
-                    )}                    <div className="retirement-comparison-grid">                      <div className={`metric pension-card ${pensionSurplus >= 0 ? 'green' : 'red'}`} style={{ minHeight: 'auto', padding: '12px' }}>
-                        <span style={{ fontSize: '0.75rem' }}>Projected Pension Pot</span>
-                        <strong style={{ fontSize: '1.2rem' }}>{money.format(actualProjectedTotals.pension)}</strong>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '4px' }}>
-                          <small style={{ fontSize: '0.65rem', color: '#666' }}>Target: {money.format(targetGrossSummary.requiredPensionPot)}</small>
-                          <small style={{ fontSize: '0.7rem', fontWeight: 800 }}>
-                            {pensionSurplus >= 0 ? '+' : ''}{money.format(pensionSurplus)}
+                    )}                    <div className="retirement-comparison-grid">
+                      {retirementAge >= pensionAccessAge ? (
+                        <div className={`metric pension-card ${pensionSurplus >= 0 ? 'green' : 'red'}`} style={{ minHeight: 'auto', padding: '12px' }}>
+                          <span style={{ fontSize: '0.75rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            Projected Pension Pot
+                            <span className="tooltip-trigger" data-tooltip={`Based on your ${drawdownRate}% drawdown rate, a target of ${money.format(targetGrossSummary.requiredPensionPot)} will provide ${money.format(targetGrossSummary.requiredPensionPot * (drawdownRate / 100))} per year in retirement income.`}>
+                              ⓘ
+                            </span>
+                          </span>
+                          <strong style={{ fontSize: '1.2rem' }}>{money.format(actualProjectedTotals.pension)}</strong>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '4px' }}>
+                            <small style={{ fontSize: '0.65rem', color: '#666' }}>Target: {money.format(targetGrossSummary.requiredPensionPot)}</small>
+                            <small style={{ fontSize: '0.7rem', fontWeight: 800 }}>
+                              {pensionSurplus >= 0 ? '+' : ''}{money.format(pensionSurplus)}
+                            </small>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="metric" style={{ minHeight: 'auto', padding: '12px', background: '#fff1f0', borderColor: '#f5d3d1', display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: '4px' }}>
+                          <span style={{ fontSize: '0.75rem', fontWeight: 800, color: '#a7332f' }}>⚠️ Pension Inaccessible</span>
+                          <small style={{ fontSize: '0.65rem', color: '#666', lineHeight: '1.2' }}>
+                            Retiring at {retirementAge.toFixed(1)} is below private pension age ({pensionAccessAge}).
                           </small>
                         </div>
-                      </div>
-                      <div className={`metric isa-card ${isaSurplus >= 0 ? 'green' : 'red'}`} style={{ minHeight: 'auto', padding: '12px' }}>
+                      )}                      <div className={`metric isa-card ${isaSurplus >= 0 ? 'green' : 'red'}`} style={{ minHeight: 'auto', padding: '12px' }}>
                         <span style={{ fontSize: '0.75rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                           Projected ISA/Cash Pot
+                          <span className="tooltip-trigger" data-tooltip={`Based on your ${drawdownRate}% drawdown rate, a target of ${money.format(targetGrossSummary.requiredIsaPot)} will provide ${money.format(targetGrossSummary.requiredIsaPot * (drawdownRate / 100))} per year in retirement income.`}>
+                            ⓘ
+                          </span>
                           {actualProjectedTotals.lisaPenaltyTotal > 0 && (
                             <small style={{ color: '#a7332f', fontWeight: 800, fontSize: '0.6rem' }}>
                               LISA PENALTY: -{money.format(actualProjectedTotals.lisaPenaltyTotal)}
@@ -1273,6 +1428,21 @@ function RetirementSection({
                           <small style={{ fontSize: '0.65rem', color: '#666' }}>Target: {money.format(targetGrossSummary.requiredIsaPot)}</small>
                           <small style={{ fontSize: '0.7rem', fontWeight: 800 }}>
                             {isaSurplus >= 0 ? '+' : ''}{money.format(isaSurplus)}
+                          </small>
+                        </div>
+                      </div>
+                      <div className={`metric ${grossEarningsNeeded > 0 ? 'red' : 'green'}`} style={{ minHeight: 'auto', padding: '12px' }}>
+                        <span style={{ fontSize: '0.75rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          Monthly Gross Earnings Needed
+                          <span className="tooltip-trigger" data-tooltip={`To cover your monthly net shortfall of ${monthlyMoney.format(totalNetShortfall)}, you would need to earn approximately ${monthlyMoney.format(grossEarningsNeeded)} gross per month (assuming standard tax and NI).`}>
+                            ⓘ
+                          </span>
+                        </span>
+                        <strong style={{ fontSize: '1.2rem' }}>{monthlyMoney.format(grossEarningsNeeded)}</strong>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '4px' }}>
+                          <small style={{ fontSize: '0.65rem', color: '#666' }}>Today's Money</small>
+                          <small style={{ fontSize: '0.7rem', fontWeight: 800 }}>
+                            {grossEarningsNeeded > 0 ? 'SHORTFALL' : 'COVERED'}
                           </small>
                         </div>
                       </div>
@@ -1291,7 +1461,7 @@ function RetirementSection({
             <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '20px' }}>
               <span style={{ fontSize: '0.9rem', color: '#666' }}>Projection Period:</span>
               <div style={{ width: '100px' }}>
-                <NumberInput placeholder="10" value={projectionYears} onChange={setProjectionYears} suffix="yrs" />
+                <NumberInput placeholder="10" value={parseFloat(projectionYears.toFixed(2))} onChange={setProjectionYears} suffix="yrs" />
               </div>
             </div>
           
@@ -1410,6 +1580,7 @@ function RetirementSection({
               <div className="budget-row header desktop-only">
                 <span>Source</span>
                 <span>Monthly Amount</span>
+                <span>Start Age</span>
                 <span>Taxable?</span>
                 <span></span>
               </div>
@@ -1417,6 +1588,7 @@ function RetirementSection({
                 <div key={item.id} className="budget-row">
                   <div><div className="mobile-label">Source</div><TextInput placeholder="e.g. Rental Income" value={item.label} onChange={(l) => setOtherIncome(updateItem<any>(otherIncome, item.id, { label: l }))} /></div>
                   <div><div className="mobile-label">Monthly Gross Amount</div><NumberInput placeholder="0" value={item.amount} onChange={(a) => setOtherIncome(updateItem<any>(otherIncome, item.id, { amount: a }))} /></div>
+                  <div><div className="mobile-label">Start Age</div><NumberInput placeholder="Retire Age" value={item.startAge || 0} onChange={(a) => setOtherIncome(updateItem<any>(otherIncome, item.id, { startAge: a }))} /></div>
                   <div>
                     <div className="mobile-label">Taxable?</div>
                     <input 

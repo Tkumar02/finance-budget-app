@@ -411,6 +411,60 @@ h2 {
   border-color: #a26013;
 }
 
+.tooltip-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  background: #eee;
+  color: #666;
+  border-radius: 50%;
+  font-size: 0.65rem;
+  cursor: help;
+  position: relative;
+  font-weight: bold;
+}
+
+.tooltip-trigger::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  bottom: 125%;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #333;
+  color: #fff;
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 0.75rem;
+  width: 220px;
+  white-space: normal;
+  visibility: hidden;
+  opacity: 0;
+  transition: opacity 0.2s, visibility 0.2s;
+  z-index: 1000;
+  pointer-events: none;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+  line-height: 1.4;
+  text-align: center;
+}
+
+.tooltip-trigger:hover::after,
+.tooltip-trigger:active::after {
+  visibility: visible;
+  opacity: 1;
+}
+
+/* Adjust tooltip position for mobile to prevent cutoff */
+@media (max-width: 600px) {
+  .tooltip-trigger::after {
+    left: auto;
+    right: 0;
+    transform: none;
+    width: 180px;
+  }
+}
+
 .pension-text {
   color: #24594f;
 }
@@ -421,11 +475,11 @@ h2 {
 
 .retirement-comparison-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 1fr 1fr 1fr;
   gap: 20px;
 }
 
-@media (max-width: 720px) {
+@media (max-width: 900px) {
   .retirement-comparison-grid {
     grid-template-columns: 1fr;
     gap: 12px;
@@ -590,6 +644,22 @@ h2 {
   color: white;
 }
 
+.retirement-cost-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid #f9f9f9;
+}
+
+.retirement-cost-row .label-field {
+  flex: 1;
+}
+
+.retirement-cost-row .amount-field {
+  width: 120px;
+}
+
 .table {
   margin-bottom: 22px;
 }
@@ -662,7 +732,7 @@ h2 {
 .expense-row,
 .budget-row {
   display: grid;
-  grid-template-columns: 1.5fr 1fr 1fr 40px;
+  grid-template-columns: 1.5fr 1fr 1fr 1fr 40px;
   gap: 12px;
   align-items: center;
   padding: 8px 0;
@@ -677,6 +747,33 @@ h2 {
     border-radius: 8px;
     margin-bottom: 12px;
     background: #fff;
+  }
+
+  .retirement-cost-row {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 8px;
+    padding: 12px;
+    border: 1px solid #e7e0d5;
+    border-radius: 8px;
+    margin-bottom: 12px;
+    background: #fff;
+  }
+
+  .retirement-cost-row .label-field {
+    grid-column: span 2;
+  }
+
+  .retirement-cost-row .amount-field {
+    width: 100%;
+  }
+
+  .retirement-cost-row .number-field {
+    width: 100%;
+  }
+
+  .retirement-cost-row .checkbox-field {
+    display: none;
   }
 }
 
