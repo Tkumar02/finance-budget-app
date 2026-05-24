@@ -61,14 +61,18 @@ export function TextInput({ value, onChange, placeholder }: { value: string; onC
   return <input placeholder={placeholder} value={value} onChange={(event) => onChange(event.target.value)} />;
 }
 
-export function NumberInput({ value, onChange, suffix, placeholder }: { value: number; onChange: (value: number) => void; suffix?: string; placeholder?: string }) {
+export function NumberInput({ value, onChange, suffix, placeholder, max }: { value: number; onChange: (value: number) => void; suffix?: string; placeholder?: string; max?: number }) {
   return (
     <span className="number-field">
       <input
         type="number"
         placeholder={placeholder}
-        value={value === 0 ? "" : value}
-        onChange={(event) => onChange(event.target.value === "" ? 0 : Number(event.target.value))}
+        value={value === undefined || value === null ? "" : value}
+        onChange={(event) => {
+          let val = event.target.value === "" ? 0 : Number(event.target.value);
+          if (max !== undefined) val = Math.min(val, max);
+          onChange(val);
+        }}
       />
       {suffix ? <span>{suffix}</span> : null}
     </span>
@@ -97,8 +101,8 @@ export function ResultRows({ rows }: { rows: [string, string | number][] }) {
   const filteredRows = rows.filter(([_, value]) => typeof value === 'string' || Math.abs(value) >= 0.01);
   return (
     <div className="result-rows">
-      {filteredRows.map(([label, value]) => (
-        <div key={label}>
+      {filteredRows.map(([label, value], i) => (
+        <div key={`${label}-${i}`}>
           <span>{label}</span>
           <strong>{typeof value === 'number' ? money.format(value) : value}</strong>
         </div>
@@ -131,11 +135,12 @@ type Plan = {
     expectedOutgoings: number;
     otherRetirementIncome: (ExpenseLine & { isTaxable?: boolean })[];
     drawdownRate: number;
-    drawdownSettings: Record<string, { enabled: boolean; rate: number; lumpSumTaken?: boolean }>;
+    drawdownSettings: Record<string, { enabled: boolean; rate: number; lumpSumTaken?: boolean; useWithdrawAge?: boolean; withdrawAge?: number; useStopAge?: boolean; stopAge?: number }>;
     inflationRate: number;
     additionalRetirementExpenses: ExpenseLine[];
     retirementTaxableFraction?: number;
     showLisaUnder60?: boolean;
+    includeStatePension?: boolean;
   };
 };
 
@@ -239,6 +244,10 @@ function App() {
   const [additionalRetirementExpenses, setAdditionalRetirementExpenses] = useState<ExpenseLine[]>([]);
   const [retirementTaxableFraction, setRetirementTaxableFraction] = useState(0.75);
   const [showLisaUnder60, setShowLisaUnder60] = useState(true);
+  const [includeStatePension, setIncludeStatePension] = useState(true);
+
+  const STATE_PENSION_AGE = 67;
+  const ANNUAL_STATE_PENSION = 11502.40; // 2024/25
 
   const currentDataString = useMemo(() => JSON.stringify({
     paye,
@@ -259,11 +268,13 @@ function App() {
     additionalRetirementExpenses,
     retirementTaxableFraction,
     showLisaUnder60,
+    includeStatePension,
   }), [
     paye, selfEmployment, taxSettings, budgetLines, annualBills, savings,
     projectionYears, mortgage, birthYear, birthMonth, expectedOutgoings,
     drawdownRate, otherRetirementIncome, drawdownSettings, inflationRate,
-    additionalRetirementExpenses, retirementTaxableFraction, showLisaUnder60
+    additionalRetirementExpenses, retirementTaxableFraction, showLisaUnder60,
+    includeStatePension,
   ]);
 
   const [lastSavedData, setLastSavedData] = useState<string>(currentDataString);
@@ -345,6 +356,7 @@ function App() {
     setAdditionalRetirementExpenses(d.additionalRetirementExpenses || []);
     setRetirementTaxableFraction(d.retirementTaxableFraction ?? 0.75);
     setShowLisaUnder60(d.showLisaUnder60 ?? true);
+    setIncludeStatePension(d.includeStatePension ?? true);
     
     // Normalize and set lastSavedData
     setLastSavedData(JSON.stringify({
@@ -366,6 +378,7 @@ function App() {
       additionalRetirementExpenses: d.additionalRetirementExpenses || [],
       retirementTaxableFraction: d.retirementTaxableFraction ?? 0.75,
       showLisaUnder60: d.showLisaUnder60 ?? true,
+      includeStatePension: d.includeStatePension ?? true,
     }));
   };
 
@@ -389,6 +402,8 @@ function App() {
       inflationRate,
       additionalRetirementExpenses,
       retirementTaxableFraction,
+      showLisaUnder60,
+      includeStatePension,
     };
 
     if (currentPlanId) {
@@ -446,6 +461,8 @@ function App() {
     setInflationRate(3);
     setAdditionalRetirementExpenses([]);
     setRetirementTaxableFraction(0.75);
+    setShowLisaUnder60(true);
+    setIncludeStatePension(true);
     
     // Reset lastSavedData to the "new plan" state
     const newDataString = JSON.stringify({
@@ -477,6 +494,8 @@ function App() {
       inflationRate: 3,
       additionalRetirementExpenses: [],
       retirementTaxableFraction: 0.75,
+      showLisaUnder60: true,
+      includeStatePension: true,
     });
     setLastSavedData(newDataString);
   };
@@ -548,7 +567,10 @@ const projectionBuckets = useMemo(() => {
   const allProjectedTotal = projectedSavings.reduce((sum, bucket) => sum + bucket.projected, 0);
 
   const currentAge = (new Date().getFullYear() - birthYear) + (new Date().getMonth() + 1 - birthMonth) / 12;
-  const retirementAge = currentAge + projectionYears;
+  const targetRetirementAge = currentAge + projectionYears;
+  const retirementAge = targetRetirementAge;
+  const clampedRetirementAge = Math.max(currentAge, targetRetirementAge);
+  const clampedProjectionYears = Math.max(0, projectionYears);
 
   const isBucketAccessible = (type: string, age: number, startWithdrawalAge?: number) => {
     if (type === 'lisa') return age >= 60;
@@ -585,6 +607,7 @@ const projectionBuckets = useMemo(() => {
     let totalAnnualTaxable = 0;
 
     projectedSavings.forEach((bucket) => {
+      if (bucket.isHidden) return;
       const settings = drawdownSettings[bucket.id] || { rate: 4, lumpSumTaken: false, useStopAge: false, useWithdrawAge: false, stopAge: 60, withdrawAge: 60 };
       
       let annualIncome = 0;
@@ -871,7 +894,7 @@ const projectionBuckets = useMemo(() => {
       {activeSection === "retirement" ? (
         <RetirementSection
           retirementAge={retirementAge}
-          setRetirementAge={(targetAge: number) => setProjectionYears(Math.max(0, targetAge - currentAge))}
+          setRetirementAge={(targetAge: number) => setProjectionYears(targetAge - currentAge)}
           outgoings={expectedOutgoings} setOutgoings={setExpectedOutgoings}
           budgetExpenses={budget.monthlyExpenses}
           monthlySurplus={budget.monthlySurplus}
@@ -906,8 +929,11 @@ const projectionBuckets = useMemo(() => {
           setBirthMonth={setBirthMonth}
           showLisaUnder60={showLisaUnder60}
           setShowLisaUnder60={setShowLisaUnder60}
-          />
-      ) : null}
+          includeStatePension={includeStatePension}
+          setIncludeStatePension={setIncludeStatePension}
+          statePensionAge={STATE_PENSION_AGE}
+          annualStatePension={ANNUAL_STATE_PENSION}
+          />      ) : null}
 
     </main>
   );
@@ -953,6 +979,10 @@ function RetirementSection({
   setBirthMonth,
   showLisaUnder60,
   setShowLisaUnder60,
+  includeStatePension,
+  setIncludeStatePension,
+  statePensionAge,
+  annualStatePension,
 }: {
   birthYear: number;
   setBirthYear: (y: number) => void;
@@ -992,6 +1022,10 @@ function RetirementSection({
   mortgageSummary: any;
   showLisaUnder60: boolean;
   setShowLisaUnder60: (s: boolean) => void;
+  includeStatePension: boolean;
+  setIncludeStatePension: (s: boolean) => void;
+  statePensionAge: number;
+  annualStatePension: number;
 }) {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analysisResult, setAnalysisResult] = useState<string | null>(null);
@@ -1000,6 +1034,7 @@ function RetirementSection({
   const hasActiveLisa = projectedSavings.some((b: any) => b.type === 'lisa' && (drawdownSettings[b.id]?.enabled ?? true));
 
   const targetGrossSummary = useMemo(() => {
+    const currentAge = (new Date().getFullYear() - birthYear) + (new Date().getMonth() + 1 - birthMonth) / 12;
     // 1. Calculate Nominal Other Income Net (including DB Pensions)
     let otherTaxable = 0;
     let otherGross = 0;
@@ -1009,8 +1044,14 @@ function RetirementSection({
     otherIncome.forEach(item => {
       const startAge = item.startAge || 0;
       if (retirementAge >= startAge) {
-        otherGross += item.amount * 12;
-        if (item.isTaxable) otherTaxable += item.amount * 12;
+        let amount = item.amount;
+        if (item.isInflationLinked) {
+            // Apply inflation from current age to retirementAge
+            const years = Math.max(0, retirementAge - currentAge);
+            amount *= Math.pow(1 + (inflationRate / 100), years);
+        }
+        otherGross += amount * 12;
+        if (item.isTaxable) otherTaxable += amount * 12;
       }
     });
 
@@ -1046,7 +1087,11 @@ function RetirementSection({
               accrual = (scheme === "classic" || scheme === "80th") ? 80 : scheme === "60th" ? 60 : 57;
           }
 
-          const annualDbIncome = (salary / accrual) * yearsAtRetirement;
+          let annualDbIncome = (salary / accrual) * yearsAtRetirement;
+          // Apply inflation to DB Pension (usually linked)
+          const years = Math.max(0, retirementAge - currentAge);
+          annualDbIncome *= Math.pow(1 + (inflationRate / 100), years);
+          
           otherGross += annualDbIncome;
           otherTaxable += annualDbIncome; // DB pensions are 100% taxable
         }
@@ -1056,9 +1101,22 @@ function RetirementSection({
     const otherTax = calculateIncomeTax(otherTaxable, taxSettings.taxCode, 0, taxSettings.region).totalTax;
     const otherNet = otherGross - otherTax;
     
-    // 2. Calculate the Gap to fund from pots (now reduced by DB pensions)
+    // C. State Pension
+    let statePensionGross = 0;
+    if (includeStatePension && retirementAge >= statePensionAge) {
+      const years = Math.max(0, retirementAge - currentAge);
+      statePensionGross = annualStatePension * Math.pow(1 + (inflationRate / 100), years);
+    }
+    
+    // Recalculate "Other" including State Pension for gap analysis
+    const totalOtherGross = otherGross + statePensionGross;
+    const totalOtherTaxable = otherTaxable + statePensionGross;
+    const totalOtherTax = calculateIncomeTax(totalOtherTaxable, taxSettings.taxCode, 0, taxSettings.region).totalTax;
+    const totalOtherNet = totalOtherGross - totalOtherTax;
+
+    // 2. Calculate the Gap to fund from pots (now reduced by DB and State pensions)
     const totalTargetNet = summary.futureMonthlyExpenses * 12;
-    const netGap = Math.max(0, totalTargetNet - otherNet);
+    const netGap = Math.max(0, totalTargetNet - totalOtherNet);
     
     const effectiveTaxableFraction = retirementAge >= pensionAccessAge ? taxableFraction : 0;
 
@@ -1067,20 +1125,35 @@ function RetirementSection({
       effectiveTaxableFraction,
       taxSettings.taxCode,
       taxSettings.region,
-      otherTaxable
+      totalOtherTaxable
     );
     
     // Calculate required pots based on drawdownRate
-    const rateDecimal = drawdownRate / 100;
+    const rateDecimal = Math.max(0.0001, drawdownRate / 100);
     const requiredPensionPot = res.grossPension / rateDecimal;
     const requiredIsaPot = res.netFromNonTaxable / rateDecimal;
     
-    return { ...res, requiredPensionPot, requiredIsaPot, otherNet, otherGross, otherTax, otherTaxable, netGap, totalTargetNet, hasDbPensions };
-  }, [summary.futureMonthlyExpenses, taxableFraction, taxSettings, drawdownRate, otherIncome, retirementAge, pensionAccessAge, projectedSavings, drawdownSettings, isBucketAccessible, birthYear, birthMonth, projectionYears, nhsJobsGross, civilServiceJobsGross, teachersJobsGross]);
+    return { 
+      ...res, 
+      requiredPensionPot, 
+      requiredIsaPot, 
+      otherNet: totalOtherNet, 
+      otherGross: totalOtherGross, 
+      otherTax: totalOtherTax, 
+      otherTaxable: totalOtherTaxable, 
+      netGap, 
+      totalTargetNet, 
+      hasDbPensions,
+      statePensionGross,
+      dbGross: 0, // Need to track this separately in the loop
+      manualGross: otherGross // This will need to be correctly split
+    };
+  }, [summary.futureMonthlyExpenses, taxableFraction, taxSettings, drawdownRate, otherIncome, retirementAge, pensionAccessAge, projectedSavings, drawdownSettings, isBucketAccessible, birthYear, birthMonth, projectionYears, nhsJobsGross, civilServiceJobsGross, teachersJobsGross, includeStatePension, annualStatePension, statePensionAge]);
 
   const actualProjectedTotals = useMemo(() => {
     let lisaPenaltyTotal = 0;
     const totals = projectedSavings.reduce((acc, bucket) => {
+      if (bucket.isHidden) return acc;
       let val = bucket.projected;
       if (bucket.type === 'lisa') {
         if (retirementAge < 60) {
@@ -1102,14 +1175,27 @@ function RetirementSection({
     return { ...totals, lisaPenaltyTotal };
   }, [projectedSavings, retirementAge, showLisaUnder60]);
 
-  const { pensionSurplus, isaSurplus, totalNetShortfall } = useMemo(() => {
+  const { pensionSurplus, isaSurplus, totalNetShortfall, incomeBreakdown } = useMemo(() => {
     const pSurplus = actualProjectedTotals.pension - targetGrossSummary.requiredPensionPot;
     const iSurplus = actualProjectedTotals.isaCash - targetGrossSummary.requiredIsaPot;
     
-    // Calculate the annual net shortfall based on this specific split.
-    // If a pot is short, we calculate the net income gap it creates.
+    // 1. Fixed Income (Net)
+    // We separate State Pension for clarity
+    const statePensionNetMonthly = (targetGrossSummary.statePensionGross / 12) * 0.8; // Rough 20% tax estimation
     
-    // Pension Gap: 25% tax-free, 75% taxable (assumed 20% basic rate for estimation)
+    // Separate DB vs Manual
+    const dbNetMonthly = (targetGrossSummary.dbGross / 12) * 0.8;
+    const otherManualNetMonthly = (targetGrossSummary.manualGross / 12) * 0.8;
+
+    // 2. Income from Pots (Net)
+    // We drawdown from what we HAVE, up to what is REQUIRED.
+    const pDrawdownGross = Math.min(actualProjectedTotals.pension, targetGrossSummary.requiredPensionPot) * (drawdownRate / 100);
+    const pDrawdownNet = (pDrawdownGross * 0.25) + (pDrawdownGross * 0.75 * 0.8); // Simple 20% tax estimation for tooltip
+    
+    const iDrawdownNet = Math.min(actualProjectedTotals.isaCash, targetGrossSummary.requiredIsaPot) * (drawdownRate / 100);
+
+    // 3. Calculate the actual net shortfall
+    // Pension Gap: 25% tax-free, 75% taxable
     const pGrossGap = Math.max(0, -pSurplus) * (drawdownRate / 100);
     const pNetGap = (pGrossGap * 0.25) + (pGrossGap * 0.75 * 0.8); 
     
@@ -1121,12 +1207,21 @@ function RetirementSection({
     return { 
       pensionSurplus: pSurplus, 
       isaSurplus: iSurplus, 
-      totalNetShortfall: monthlyNetShortfall 
+      totalNetShortfall: monthlyNetShortfall,
+      incomeBreakdown: {
+        statePensionNet: statePensionNetMonthly,
+        dbNet: dbNetMonthly,
+        otherManualNet: otherManualNetMonthly,
+        pDrawdownNet: pDrawdownNet / 12,
+        iDrawdownNet: iDrawdownNet / 12,
+        shortfall: monthlyNetShortfall,
+        target: targetGrossSummary.totalTargetNet / 12
+      }
     };
   }, [actualProjectedTotals, targetGrossSummary, drawdownRate]);
 
   const grossEarningsNeeded = useMemo(() => {
-    if (totalNetShortfall <= 0.01) return 0;
+    if (totalNetShortfall <= 0.01 || Number.isNaN(totalNetShortfall)) return 0;
     
     // We need to find how much GROSS is required to get totalNetShortfall NET, 
     // but we must account for the fact that we already have otherTaxable income 
@@ -1145,7 +1240,9 @@ function RetirementSection({
       const mid = (low + high) / 2;
       const totalTaxable = baselineTaxableAnnual + mid;
       const tax = calculateIncomeTax(totalTaxable, taxSettings.taxCode, 0, taxSettings.region).totalTax;
-      const ni = calculateNationalInsurance(totalTaxable, "class1"); // NI usually only on EARNED income, but we'll include it for a conservative "earnings" estimate
+      
+      // NI is only on the EARNED portion (mid), not the combined pension+earned total.
+      const ni = calculateNationalInsurance(mid, "class1"); 
       
       const currentNet = totalTaxable - tax - ni;
       const extraNet = currentNet - baselineNet;
@@ -1162,11 +1259,26 @@ function RetirementSection({
       <section className="panel span-12">
         <h2>Retirement Settings</h2>
         <div className="settings-grid">
-          <label>Target Retirement Age <input type="number" placeholder="67" value={Math.round(retirementAge) || ""} onChange={e => setRetirementAge(Number(e.target.value))} /></label>
+          <label>Target Retirement Age 
+            <NumberInput placeholder="67" value={Math.round(retirementAge) || 0} onChange={setRetirementAge} max={120} />
+          </label>
           <label>Assumed Annual Inflation % 
             <NumberInput placeholder="3" value={inflationRate} onChange={setInflationRate} suffix="%" />
           </label>
         </div>
+        {retirementAge >= statePensionAge && (
+          <div style={{ marginTop: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <input 
+              type="checkbox" 
+              id="includeStatePension" 
+              checked={includeStatePension} 
+              onChange={e => setIncludeStatePension(e.target.checked)} 
+            />
+            <label htmlFor="includeStatePension" style={{ fontSize: '0.9rem', color: '#666', fontWeight: 600 }}>
+              Entitled to full State Pension? ({money.format(annualStatePension)}/yr)
+            </label>
+          </div>
+        )}
         {retirementAge < 60 && hasAnyLisa && (
           <div style={{ marginTop: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
             <input 
@@ -1434,12 +1546,11 @@ function RetirementSection({
                       <div className={`metric ${grossEarningsNeeded > 0 ? 'red' : 'green'}`} style={{ minHeight: 'auto', padding: '12px' }}>
                         <span style={{ fontSize: '0.75rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                           Monthly Gross Earnings Needed
-                          <span className="tooltip-trigger" data-tooltip={`To cover your monthly net shortfall of ${monthlyMoney.format(totalNetShortfall)}, you would need to earn approximately ${monthlyMoney.format(grossEarningsNeeded)} gross per month (assuming standard tax and NI).`}>
+                          <span className="tooltip-trigger" data-tooltip={`Income Sources (Net Monthly):\n- State Pension: ${monthlyMoney.format(incomeBreakdown.statePensionNet)}\n- Defined Benefit (DB) Pensions: ${monthlyMoney.format(incomeBreakdown.dbNet)}\n- Other Income Sources: ${monthlyMoney.format(incomeBreakdown.otherManualNet)}\n- Pension Drawdown: ${monthlyMoney.format(incomeBreakdown.pDrawdownNet)}\n- ISA/Cash Drawdown: ${monthlyMoney.format(incomeBreakdown.iDrawdownNet)}\n-------------------\n- TOTAL NET INCOME: ${monthlyMoney.format(incomeBreakdown.statePensionNet + incomeBreakdown.dbNet + incomeBreakdown.otherManualNet + incomeBreakdown.pDrawdownNet + incomeBreakdown.iDrawdownNet)}\n- TARGET: ${monthlyMoney.format(incomeBreakdown.target)}\n- NET SHORTFALL: ${monthlyMoney.format(incomeBreakdown.shortfall)}\n\nTo cover this shortfall, you need to earn approximately ${monthlyMoney.format(grossEarningsNeeded)} gross per month.`}>
                             ⓘ
                           </span>
                         </span>
-                        <strong style={{ fontSize: '1.2rem' }}>{monthlyMoney.format(grossEarningsNeeded)}</strong>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '4px' }}>
+                        <strong style={{ fontSize: '1.2rem' }}>{monthlyMoney.format(grossEarningsNeeded)}</strong>                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '4px' }}>
                           <small style={{ fontSize: '0.65rem', color: '#666' }}>Today's Money</small>
                           <small style={{ fontSize: '0.7rem', fontWeight: 800 }}>
                             {grossEarningsNeeded > 0 ? 'SHORTFALL' : 'COVERED'}
@@ -1524,26 +1635,25 @@ function RetirementSection({
                         />
                         {settings.useStopAge && (
                           <div className="age-input-container" style={{ width: '60px' }}>
-                            <NumberInput value={settings.stopAge} onChange={(val) => setDrawdownSettings({...drawdownSettings, [bucket.id]: {...settings, stopAge: val}})} />
+                            <NumberInput value={settings.stopAge} onChange={(val) => setDrawdownSettings({...drawdownSettings, [bucket.id]: {...settings, stopAge: val}})} max={120} />
                           </div>
                         )}
-                      </div>
-                    </div>
-                    <div>
-                      <div className="mobile-label">Withdrawal Age</div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                        <input 
-                          type="checkbox" 
-                          checked={settings.useWithdrawAge} 
-                          onChange={(e) => setDrawdownSettings({...drawdownSettings, [bucket.id]: {...settings, useWithdrawAge: e.target.checked}})} 
+                        </div>
+                        </div>
+                        <div>
+                        <div className="mobile-label">Withdrawal Age</div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                        <input
+                          type="checkbox"
+                          checked={settings.useWithdrawAge}
+                          onChange={(e) => setDrawdownSettings({...drawdownSettings, [bucket.id]: {...settings, useWithdrawAge: e.target.checked}})}
                         />
                         {settings.useWithdrawAge && (
                           <div className="age-input-container" style={{ width: '60px' }}>
-                            <NumberInput value={settings.withdrawAge} onChange={(val) => setDrawdownSettings({...drawdownSettings, [bucket.id]: {...settings, withdrawAge: val}})} />
+                            <NumberInput value={settings.withdrawAge} onChange={(val) => setDrawdownSettings({...drawdownSettings, [bucket.id]: {...settings, withdrawAge: val}})} max={120} />
                           </div>
                         )}
-                      </div>
-                    </div>
+                        </div>                    </div>
                   </div>
                 );
               })}
@@ -1582,19 +1692,26 @@ function RetirementSection({
                 <span>Monthly Amount</span>
                 <span>Start Age</span>
                 <span>Taxable?</span>
+                <span>Inflation Linked?</span>
                 <span></span>
               </div>
               {otherIncome.map((item: any) => (
                 <div key={item.id} className="budget-row">
                   <div><div className="mobile-label">Source</div><TextInput placeholder="e.g. Rental Income" value={item.label} onChange={(l) => setOtherIncome(updateItem<any>(otherIncome, item.id, { label: l }))} /></div>
                   <div><div className="mobile-label">Monthly Gross Amount</div><NumberInput placeholder="0" value={item.amount} onChange={(a) => setOtherIncome(updateItem<any>(otherIncome, item.id, { amount: a }))} /></div>
-                  <div><div className="mobile-label">Start Age</div><NumberInput placeholder="Retire Age" value={item.startAge || 0} onChange={(a) => setOtherIncome(updateItem<any>(otherIncome, item.id, { startAge: a }))} /></div>
-                  <div>
-                    <div className="mobile-label">Taxable?</div>
+                  <div><div className="mobile-label">Start Age</div><NumberInput placeholder="Retire Age" value={item.startAge || 0} onChange={(a) => setOtherIncome(updateItem<any>(otherIncome, item.id, { startAge: a }))} max={120} /></div>
+                  <div><div className="mobile-label">Taxable?</div>
                     <input 
                       type="checkbox" 
                       checked={item.isTaxable ?? false} 
                       onChange={(e) => setOtherIncome(updateItem<any>(otherIncome, item.id, { isTaxable: e.target.checked }))} 
+                    />
+                  </div>
+                  <div><div className="mobile-label">Subject to Inflation?</div>
+                    <input 
+                      type="checkbox" 
+                      checked={item.isInflationLinked ?? false} 
+                      onChange={(e) => setOtherIncome(updateItem<any>(otherIncome, item.id, { isInflationLinked: e.target.checked }))} 
                     />
                   </div>
                   <button className="delete-btn" onClick={() => setOtherIncome(otherIncome.filter((i: any) => i.id !== item.id))}>×</button>
@@ -2136,14 +2253,29 @@ function SettingsSection({ taxSettings, setTaxSettings, birthYear, setBirthYear,
       <section className="panel span-6">
         <h2>Profile Details</h2>
         <div className="settings-grid">
-          <label>Birth Year <input type="number" placeholder="YYYY" value={birthYear || ""} onChange={e => setBirthYear(Number(e.target.value))} /></label>
-          <label>Birth Month (1-12) <input type="number" min="1" max="12" placeholder="MM" value={birthMonth || ""} onChange={e => setBirthMonth(Number(e.target.value))} /></label>
+          <label>Birth Year 
+            <NumberInput 
+              placeholder="YYYY" 
+              value={birthYear} 
+              onChange={(val) => {
+                const currentYear = new Date().getFullYear();
+                const minYear = currentYear - 120;
+                setBirthYear(Math.max(minYear, val));
+              }} 
+            />
+          </label>
+          <label>Birth Month (1-12) 
+            <NumberInput 
+              placeholder="MM" 
+              value={birthMonth} 
+              onChange={(val) => setBirthMonth(Math.max(1, Math.min(12, val)))} 
+            />
+          </label>
         </div>
         <p className="notice" style={{ maxWidth: 'none' }}>
           These details are used to calculate your current age and pension access dates.
         </p>
-      </section>
-    </div>
+      </section>    </div>
   );
 }
 
@@ -2171,62 +2303,74 @@ function BudgetSection({
   return (
     <div className="workspace">
       <section className="panel span-6">
-        <PanelHeader title="Monthly Expenses" actionLabel="Add expense" onAction={() => setBudgetLines([...budgetLines, { id: uid(), label: "New expense", amount: 0, bucket: "living" }])} />
-        <div className="budget-lines">
-          <div className="budget-row header desktop-only">
-            <span>Label</span>
-            <span>Category</span>
-            <span>Amount</span>
-            <span></span>
-          </div>
-          {budgetLines.map((line) => (
-            <div className="budget-row" key={line.id}>
-              <div><div className="mobile-label">Label</div><TextInput placeholder="e.g. Rent" value={line.label} onChange={(label) => setBudgetLines(updateItem(budgetLines, line.id, { label }))} /></div>
-              <div><div className="mobile-label">Category</div><select value={line.bucket} onChange={(event) => setBudgetLines(updateItem(budgetLines, line.id, { bucket: event.target.value as BudgetLine["bucket"] }))}>
-                <option value="living">Living</option>
-                <option value="housing">Housing</option>
-                <option value="debt">Debt</option>
-                <option value="tax">Tax</option>
-                <option value="food">Food</option>
-                <option value="entertainment">Entertainment</option>
-                <option value="professional">Professional</option>
-              </select></div>
+        <details className="disclosure-section" open>
+          <summary>
+            <PanelHeader title="Monthly Expenses" actionLabel="Add expense" onAction={() => setBudgetLines([...budgetLines, { id: uid(), label: "New expense", amount: 0, bucket: "living" }])} />
+          </summary>
+          <div className="disclosure-content">
+            <div className="budget-lines">
+              <div className="budget-row header desktop-only">
+                <span>Label</span>
+                <span>Category</span>
+                <span>Amount</span>
+                <span></span>
+              </div>
+              {budgetLines.map((line) => (
+                <div className="budget-row" key={line.id}>
+                  <div><div className="mobile-label">Label</div><TextInput placeholder="e.g. Rent" value={line.label} onChange={(label) => setBudgetLines(updateItem(budgetLines, line.id, { label }))} /></div>
+                  <div><div className="mobile-label">Category</div><select value={line.bucket} onChange={(event) => setBudgetLines(updateItem(budgetLines, line.id, { bucket: event.target.value as BudgetLine["bucket"] }))}>
+                    <option value="living">Living</option>
+                    <option value="housing">Housing</option>
+                    <option value="debt">Debt</option>
+                    <option value="tax">Tax</option>
+                    <option value="food">Food</option>
+                    <option value="entertainment">Entertainment</option>
+                    <option value="professional">Professional</option>
+                  </select></div>
 
-              <div><div className="mobile-label">Amount</div><NumberInput placeholder="0" value={line.amount} onChange={(amount) => setBudgetLines(updateItem(budgetLines, line.id, { amount }))} /></div>
-              <button className="delete-btn" onClick={() => setBudgetLines(budgetLines.filter((l: any) => l.id !== line.id))}>×</button>
+                  <div><div className="mobile-label">Amount</div><NumberInput placeholder="0" value={line.amount} onChange={(amount) => setBudgetLines(updateItem(budgetLines, line.id, { amount }))} /></div>
+                  <button className="delete-btn" onClick={() => setBudgetLines(budgetLines.filter((l: any) => l.id !== line.id))}>×</button>
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
+          </div>
+        </details>
       </section>
 
       <section className="panel span-6">
-        <PanelHeader title="Annual Bills" actionLabel="Add annual bill" onAction={() => setAnnualBills([...annualBills, { id: uid(), label: "Annual bill", amount: 0, bucket: 'living' }])} />
-        <div className="budget-lines">
-          <div className="budget-row header desktop-only">
-            <span>Label</span>
-            <span>Category</span>
-            <span>Amount</span>
-            <span></span>
-          </div>
-          {annualBills.map((line) => (
-            <div className="budget-row" key={line.id}>
-              <div><div className="mobile-label">Label</div><TextInput placeholder="e.g. Car Insurance" value={line.label} onChange={(label) => setAnnualBills(updateItem(annualBills, line.id, { label }))} /></div>
-              <div><div className="mobile-label">Category</div><select value={line.bucket} onChange={(event) => setAnnualBills(updateItem(annualBills, line.id, { bucket: event.target.value as any }))}>
-                <option value="living">Living</option>
-                <option value="housing">Housing</option>
-                <option value="debt">Debt</option>
-                <option value="tax">Tax</option>
-                <option value="food">Food</option>
-                <option value="entertainment">Entertainment</option>
-                <option value="professional">Professional</option>
-                <option value="saving">Saving</option>
-              </select></div>
-              <div><div className="mobile-label">Amount</div><NumberInput placeholder="0" value={line.amount} onChange={(amount) => setAnnualBills(updateItem(annualBills, line.id, { amount }))} /></div>
-              <button className="delete-btn" onClick={() => setAnnualBills(annualBills.filter((l: any) => l.id !== line.id))}>×</button>
+        <details className="disclosure-section" open>
+          <summary>
+            <PanelHeader title="Annual Bills" actionLabel="Add annual bill" onAction={() => setAnnualBills([...annualBills, { id: uid(), label: "Annual bill", amount: 0, bucket: 'living' }])} />
+          </summary>
+          <div className="disclosure-content">
+            <div className="budget-lines">
+              <div className="budget-row header desktop-only">
+                <span>Label</span>
+                <span>Category</span>
+                <span>Amount</span>
+                <span></span>
+              </div>
+              {annualBills.map((line) => (
+                <div className="budget-row" key={line.id}>
+                  <div><div className="mobile-label">Label</div><TextInput placeholder="e.g. Car Insurance" value={line.label} onChange={(label) => setAnnualBills(updateItem(annualBills, line.id, { label }))} /></div>
+                  <div><div className="mobile-label">Category</div><select value={line.bucket} onChange={(event) => setAnnualBills(updateItem(annualBills, line.id, { bucket: event.target.value as any }))}>
+                    <option value="living">Living</option>
+                    <option value="housing">Housing</option>
+                    <option value="debt">Debt</option>
+                    <option value="tax">Tax</option>
+                    <option value="food">Food</option>
+                    <option value="entertainment">Entertainment</option>
+                    <option value="professional">Professional</option>
+                    <option value="saving">Saving</option>
+                  </select></div>
+                  <div><div className="mobile-label">Amount</div><NumberInput placeholder="0" value={line.amount} onChange={(amount) => setAnnualBills(updateItem(annualBills, line.id, { amount }))} /></div>
+                  <button className="delete-btn" onClick={() => setAnnualBills(annualBills.filter((l: any) => l.id !== line.id))}>×</button>
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
-        <div className="mini-total">Monthly provision {monthlyMoney.format(budget.annualBillsMonthly)}</div>
+            <div className="mini-total">Monthly provision {monthlyMoney.format(budget.annualBillsMonthly)}</div>
+          </div>
+        </details>
       </section>
 
       <section className="panel span-6">
@@ -2399,12 +2543,11 @@ function MortgageSection({
       <div className="mortgage-grid">
         <label>Mortgage amount <NumberInput placeholder="0" value={mortgage.amount} onChange={(amount) => setMortgage({ ...mortgage, amount })} /></label>
         <label>Annual rate % <NumberInput placeholder="0" value={mortgage.annualRate} onChange={(annualRate) => setMortgage({ ...mortgage, annualRate })} /></label>
-        <label>Term years <NumberInput placeholder="0" value={mortgage.years} onChange={(years) => setMortgage({ ...mortgage, years })} /></label>
+        <label>Term years <NumberInput placeholder="0" value={mortgage.years} onChange={(years) => setMortgage({ ...mortgage, years })} max={120} /></label>
         <label>Monthly overpayment <NumberInput placeholder="0" value={mortgage.monthlyOverpayment} onChange={(monthlyOverpayment) => setMortgage({ ...mortgage, monthlyOverpayment })} /></label>
         <label>One-off month <NumberInput placeholder="0" value={mortgage.oneOffMonth} onChange={(oneOffMonth) => setMortgage({ ...mortgage, oneOffMonth })} /></label>
         <label>One-off amount <NumberInput placeholder="0" value={mortgage.oneOffAmount} onChange={(oneOffAmount) => setMortgage({ ...mortgage, oneOffAmount })} /></label>
-      </div>
-      <section className="summary-grid tight">
+      </div>      <section className="summary-grid tight">
         <Metric label="Standard payment" value={monthlyMoney.format(mortgageSummary.standardPayment)} />
         <Metric label="Payoff time" value={`${mortgageSummary.payoffYears.toFixed(1)} years`} />
         <Metric label="Interest paid" value={money.format(mortgageSummary.totalInterest)} tone="amber" />
@@ -2438,8 +2581,14 @@ function DepletionChart({ projectedSavings, drawdownSettings, retirementAge, pen
       
       // During retirement phase (from Year 0 onwards), we assume contributions have already stopped.
       // Therefore, growth is always at the economy-wide Inflation Rate (safe haven assets).
-      const r = (inflationRate || 3) / 100; 
-      const startingBalance = bucket.finalBalance || 0;
+      const r = (inflationRate ?? 3) / 100; 
+      
+      let startingBalance = bucket.finalBalance || 0;
+      
+      // Apply LISA penalty if retiring under 60 (consistent with summary cards)
+      if (bucket.type === 'lisa' && retirementAge < 60) {
+        startingBalance = startingBalance * 0.75;
+      }
 
       let balance;
 
@@ -2450,15 +2599,16 @@ function DepletionChart({ projectedSavings, drawdownSettings, retirementAge, pen
         balance = startingBalance * Math.pow(1 + r, growthYears);
       } else {
         // Pot is in drawdown
-        // 1. Calculate how many years it's been in drawdown
+        // 1. Calculate how many years it's been in drawdown relative to the START of the graph (retirementAge)
         const drawdownStartAge = settings.useWithdrawAge ? settings.withdrawAge : (bucket.startWithdrawalAge || retirementAge);
-        const yearsInDrawdown = Math.max(0, age - drawdownStartAge);
+        const yearsInDrawdown = Math.max(0, age - Math.max(retirementAge, drawdownStartAge));
 
-        // 2. Growth until drawdown starts
+        // 2. Growth until drawdown starts (only relevant if drawdown starts AFTER retirement)
         const yearsUntilDrawdown = Math.max(0, drawdownStartAge - retirementAge);
         const balanceAtDrawdownStart = startingBalance * Math.pow(1 + r, yearsUntilDrawdown);
 
-        const d = balanceAtDrawdownStart * (settings.rate / 100); 
+        const rate = settings.rate ?? 4;
+        const d = balanceAtDrawdownStart * (rate / 100); 
         if (r === 0) { 
           balance = balanceAtDrawdownStart - d * yearsInDrawdown; 
         } else { 
@@ -2470,6 +2620,7 @@ function DepletionChart({ projectedSavings, drawdownSettings, retirementAge, pen
       }); 
       return { year, age, buckets }; 
       }); 
+  if (!data || data.length === 0 || !data[0]?.buckets) return null; 
   if (data[0].buckets.length === 0) return null; 
   return (
     <div className='depletion-chart' style={{ marginTop: '24px' }}>

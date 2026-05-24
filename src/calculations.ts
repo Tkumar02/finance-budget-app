@@ -15,6 +15,7 @@ export type ExpenseLine = {
   amount: number;
   includeInRetirement?: boolean;
   startAge?: number;
+  isInflationLinked?: boolean;
   bucket: "living" | "housing" | "debt" | "saving" | "tax" | "food" | "entertainment" | "professional";
 };
 
@@ -102,10 +103,6 @@ export function totalPayeTaxable(incomes: PayeIncome[]) {
     const percentagePension = gross * (clampNumber(income.pensionRate) / 100);
     return sum + Math.max(0, gross - percentagePension);
   }, 0);
-}
-
-export function totalPayeTaxPaid(incomes: PayeIncome[]) {
-  return incomes.reduce((sum, income) => sum + clampNumber(income.taxPaid), 0);
 }
 
 export function employmentPension(incomes: PayeIncome[]) {
@@ -249,8 +246,8 @@ export function calculateTaxSummary(incomes: PayeIncome[], streams: SelfEmployme
   );
   
   const payeOnlyTax = calculateIncomeTax(payeTaxable, settings.taxCode, 0, settings.region);
-  const enteredTaxPaid = totalPayeTaxPaid(incomes);
-  const assumedPayeTaxPaid = enteredTaxPaid > 0 ? enteredTaxPaid : payeOnlyTax.totalTax;
+  const enteredTaxPaid = 0;
+  const assumedPayeTaxPaid = payeOnlyTax.totalTax;
   const selfAssessmentDue = Math.max(0, combinedTax.totalTax - assumedPayeTaxPaid);
   
   // National Insurance
@@ -416,7 +413,8 @@ export function projectSavings(buckets: SavingsBucket[], years: number, birthYea
         // Pot is in drawdown
         if (b.currentBalance > 0) {
           b.isWithdrawn = true; // Mark as started withdrawal
-          const annualDrawdownAmount = b.currentBalance * (settings.rate / 100);
+          const rate = settings.rate ?? 4;
+          const annualDrawdownAmount = b.currentBalance * (rate / 100);
           const monthlyDrawdown = annualDrawdownAmount / 12;
           
           // Growth then withdrawal
