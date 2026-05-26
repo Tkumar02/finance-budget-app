@@ -28,7 +28,7 @@ export type SelfEmployment = {
 };
 
 export type BudgetLine = ExpenseLine & {
-  bucket: "living" | "housing" | "debt" | "saving" | "tax" | "food" | "entertainment";
+  bucket: "living" | "housing" | "debt" | "saving" | "tax" | "food" | "entertainment" | "professional";
 };
 
 export type SavingsBucket = {
@@ -302,11 +302,11 @@ export function budgetSummary(
       acc[line.bucket] += clampNumber(line.amount);
       return acc;
     },
-    { living: 0, housing: 0, debt: 0, saving: 0, tax: 0, food: 0, entertainment: 0 },
+    { living: 0, housing: 0, debt: 0, saving: 0, tax: 0, food: 0, entertainment: 0, professional: 0 },
   );
   const annualBillsMonthly = annualBills.reduce((sum, bill) => sum + clampNumber(bill.amount) / 12, 0);
-  const monthlySavings = savings.reduce((sum, bucket) => sum + clampNumber(bucket.monthly), 0) + clampNumber(mortgageOverpayment);
-  const monthlyExpenses = totals["living"] + totals["housing"] + totals["debt"] + totals["tax"] + totals["food"] + totals["entertainment"] + annualBillsMonthly;
+  const monthlySavings = savings.reduce((sum, bucket) => sum + clampNumber(bucket.monthly), 0) + clampNumber(mortgageOverpayment) + totals["saving"];
+  const monthlyExpenses = totals["living"] + totals["housing"] + totals["debt"] + totals["tax"] + totals["food"] + totals["entertainment"] + totals["professional"] + annualBillsMonthly;
   const monthlyOut = monthlyExpenses + monthlySavings;
   return {
     totals,

@@ -2279,6 +2279,100 @@ function SettingsSection({ taxSettings, setTaxSettings, birthYear, setBirthYear,
   );
 }
 
+function BudgetDonut({ budget }: { budget: ReturnType<typeof budgetSummary> }) {
+  const categories = [
+    { label: "Housing", value: budget.totals.housing, color: "#64cdba" },
+    { label: "Food", value: budget.totals.food, color: "#86a2df" },
+    { label: "Entertainment", value: budget.totals.entertainment, color: "#a26013" },
+    { label: "Living", value: budget.totals.living, color: "#5d675f" },
+    { label: "Debt", value: budget.totals.debt, color: "#250dbd" },
+    { label: "Tax", value: budget.totals.tax, color: "#05da8c" },
+    { label: "Savings", value: budget.monthlySavings, color: "#8a0d13" },
+    { label: "Professional", value: budget.totals.professional, color: "#cd7625" },
+    { label: "Annual Bills", value: budget.annualBillsMonthly, color: "#ab2cdd" },
+  ].filter(c => c.value > 0);
+
+  const total = budget.monthlyOut;
+
+  if (total === 0) {
+    return (
+      <div className="donut-placeholder">
+        Add some income or expenses to see your spending breakdown.
+      </div>
+    );
+  }
+
+  let currentAngle = 0;
+  const radius = 75;
+  const cx = 100;
+  const cy = 100;
+  const strokeWidth = 25;
+
+  return (
+    <div className="donut-container">
+      <div className="donut-svg-wrapper">
+        <svg viewBox="0 0 200 200" width="100%" height="100%">
+          {categories.map((cat) => {
+            const percentage = cat.value / total;
+            const angle = percentage * 360;
+            
+            if (percentage >= 0.999) {
+              return (
+                <circle
+                  key={cat.label}
+                  cx={cx}
+                  cy={cy}
+                  r={radius}
+                  fill="none"
+                  stroke={cat.color}
+                  strokeWidth={strokeWidth}
+                  className="donut-segment"
+                />
+              );
+            }
+
+            const x1 = cx + radius * Math.cos((currentAngle - 90) * Math.PI / 180);
+            const y1 = cy + radius * Math.sin((currentAngle - 90) * Math.PI / 180);
+            
+            currentAngle += angle;
+            
+            const x2 = cx + radius * Math.cos((currentAngle - 90) * Math.PI / 180);
+            const y2 = cy + radius * Math.sin((currentAngle - 90) * Math.PI / 180);
+
+            const largeArcFlag = angle > 180 ? 1 : 0;
+            const d = `M ${x1} ${y1} A ${radius} ${radius} 0 ${largeArcFlag} 1 ${x2} ${y2}`;
+
+            return (
+              <path
+                key={cat.label}
+                d={d}
+                fill="none"
+                stroke={cat.color}
+                strokeWidth={strokeWidth}
+                className="donut-segment"
+              />
+            );
+          })}
+        </svg>
+        <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%' }} className="donut-center-text">
+          <span className="donut-total-label">Total Out</span>
+          <span className="donut-total-value">{monthlyMoney.format(total)}</span>
+        </div>
+      </div>
+
+      <div className="donut-legend">
+        {categories.map((cat) => (
+          <div key={cat.label} className="legend-item">
+            <span className="legend-color" style={{ backgroundColor: cat.color }}></span>
+            <span className="legend-label">{cat.label}</span>
+            <span className="legend-value">{monthlyMoney.format(cat.value)}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function BudgetSection({
   monthlyNet,
   budget,
@@ -2302,7 +2396,12 @@ function BudgetSection({
 }) {
   return (
     <div className="workspace">
-      <section className="panel span-6">
+      <section className="panel span-4" style={{ gridRow: 'span 2' }}>
+        <h2>Spending Breakdown</h2>
+        <BudgetDonut budget={budget} />
+      </section>
+
+      <section className="panel span-8">
         <details className="disclosure-section" open>
           <summary>
             <PanelHeader title="Monthly Expenses" actionLabel="Add expense" onAction={() => setBudgetLines([...budgetLines, { id: uid(), label: "New expense", amount: 0, bucket: "living" }])} />
@@ -2337,7 +2436,7 @@ function BudgetSection({
         </details>
       </section>
 
-      <section className="panel span-6">
+      <section className="panel span-8">
         <details className="disclosure-section" open>
           <summary>
             <PanelHeader title="Annual Bills" actionLabel="Add annual bill" onAction={() => setAnnualBills([...annualBills, { id: uid(), label: "Annual bill", amount: 0, bucket: 'living' }])} />
