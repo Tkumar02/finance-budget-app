@@ -338,12 +338,20 @@ h2 {
   gap: 8px;
   color: #18201d;
   text-align: left;
-  background: #fffaf1;
+  transition: all 0.2s ease-out;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+}
+
+.section-card:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.1);
+  filter: brightness(1.02);
 }
 
 .section-card.active {
   border-color: #24594f;
-  background: #ecf4ee;
+  box-shadow: 0 8px 24px rgba(36, 89, 79, 0.15);
+  transform: translateY(-1px);
 }
 
 .section-card span,
@@ -399,6 +407,29 @@ h2 {
 
 .metric.red strong {
   color: #a7332f;
+}
+
+.metric.gold {
+  background: linear-gradient(135deg, #fff9e6 0%, #fdf2d0 100%);
+  border-color: #d4af37;
+  box-shadow: 0 10px 25px rgba(212, 175, 55, 0.15);
+}
+
+.metric.gold span {
+  color: #856404;
+}
+
+.metric.gold strong {
+  color: #a27e1a;
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.5);
+}
+
+.metric.gold.red strong {
+  color: #a7332f;
+}
+
+.metric.gold.green strong {
+  color: #187050;
 }
 
 .metric.pension-card {
@@ -738,8 +769,17 @@ h2 {
   padding: 8px 0;
 }
 
+.income-source-row {
+  display: grid;
+  grid-template-columns: 1.5fr 1fr 1fr 0.8fr 0.8fr 40px;
+  gap: 12px;
+  align-items: center;
+  padding: 8px 0;
+}
+
 @media (max-width: 600px) {
-  .budget-row {
+  .budget-row,
+  .income-source-row {
     grid-template-columns: 1fr;
     gap: 8px;
     padding: 12px;

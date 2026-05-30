@@ -155,8 +155,9 @@ export function calculateIncomeTax(
   taxCode: string,
   grossReliefAtSourcePension = 0,
   region: Region = "england-wales-ni",
+  interestIncome = 0,
 ) {
-  const adjustedNetIncome = Math.max(0, taxableIncomeBeforeAllowance - grossReliefAtSourcePension);
+  const adjustedNetIncome = Math.max(0, taxableIncomeBeforeAllowance + interestIncome - grossReliefAtSourcePension);
   const allowance = personalAllowance(adjustedNetIncome, taxCode);
   const taxableAfterAllowance = Math.max(0, taxableIncomeBeforeAllowance - allowance);
   const basicExtension = grossReliefAtSourcePension;
@@ -190,11 +191,47 @@ export function calculateIncomeTax(
     return { ...band, taxable, tax };
   });
 
+  // Calculate highest marginal rate for PSA
+  // For PSA, we look at the band results and see if any higher/additional rate was hit
+  const isHigherRate = bandResults.some(b => (b.label === "Higher" || b.label === "Advanced" || b.label === "Top") && b.taxable > 0);
+  const isAdditionalRate = bandResults.some(b => (b.label === "Additional" || b.label === "Top") && b.taxable > 0);
+  
+  const psaAllowance = isAdditionalRate ? 0 : (isHigherRate ? 500 : 1000);
+  const taxableInterest = Math.max(0, interestIncome - psaAllowance);
+  
+  // Tax on interest is at the marginal rate(s)
+  // Simplified: we add interest on top of existing taxable income
+  let remainingInterest = taxableInterest;
+  let interestTax = 0;
+  
+  // Re-calculate bands with interest to find interest tax
+  let totalWithInterest = taxableAfterAllowance + taxableInterest;
+  let remainingTotal = totalWithInterest;
+  let previousLimitInt = 0;
+  let totalTaxWithInterest = 0;
+  
+  bands.forEach((band) => {
+    const width = band.limit === Infinity ? Infinity : Math.max(0, band.limit - previousLimitInt);
+    const taxable = Math.max(0, Math.min(remainingTotal, width));
+    const tax = taxable * band.rate;
+    totalTaxWithInterest += tax;
+    remainingTotal -= taxable;
+    previousLimitInt = band.limit;
+  });
+
+  interestTax = totalTaxWithInterest - totalTax;
+
   return {
     adjustedNetIncome,
     allowance,
     taxableAfterAllowance,
-    totalTax,
+    totalTax: totalTax + interestTax,
+    incomeTaxOnly: totalTax,
+    interestTax,
+    psaAllowance,
+    taxableInterest,
+    isHigherRate,
+    isAdditionalRate,
     bandResults,
   };
 }
@@ -224,7 +261,7 @@ export function calculateNationalInsurance(taxableIncome: number, type: "class1"
   return totalNi;
 }
 
-export function calculateTaxSummary(incomes: PayeIncome[], streams: SelfEmployment[], settings: TaxSettings) {
+export function calculateTaxSummary(incomes: PayeIncome[], streams: SelfEmployment[], savings: SavingsBucket[], settings: TaxSettings) {
   const payeTaxable = totalPayeTaxable(incomes);
   const payeGross = totalPayeGross(incomes);
   
@@ -236,6 +273,11 @@ export function calculateTaxSummary(incomes: PayeIncome[], streams: SelfEmployme
     return sum + Math.max(0, clampNumber(stream.gross) - expenses);
   }, 0);
 
+  // Savings interest (from non-ISA buckets)
+  const annualSavingsInterest = savings
+    .filter(s => s.type === "cash")
+    .reduce((sum, s) => sum + (clampNumber(s.balance) * (clampNumber(s.annualRate) / 100)), 0);
+
   const grossReliefAtSourcePension = grossSippFromNet(settings.sippNetContribution);
   const combinedTaxable = payeTaxable + selfProfit;
   const combinedTax = calculateIncomeTax(
@@ -243,6 +285,7 @@ export function calculateTaxSummary(incomes: PayeIncome[], streams: SelfEmployme
     settings.taxCode,
     grossReliefAtSourcePension,
     settings.region,
+    annualSavingsInterest
   );
   
   const payeOnlyTax = calculateIncomeTax(payeTaxable, settings.taxCode, 0, settings.region);
@@ -259,16 +302,25 @@ export function calculateTaxSummary(incomes: PayeIncome[], streams: SelfEmployme
   const employerPensionTotal = employerPensionContributions(incomes);
   
   const selfTaxTotal = selfAssessmentDue + selfNi;
-  const netAnnual = payeGross - employmentPensionTotal - assumedPayeTaxPaid - payeNi + selfProfit - selfTaxTotal;
+  const netAnnual = payeGross - employmentPensionTotal - assumedPayeTaxPaid - payeNi + selfProfit - selfTaxTotal + annualSavingsInterest - combinedTax.interestTax;
   const cashAnnual = payeGross - employmentPensionTotal - assumedPayeTaxPaid - payeNi + selfProfit;
   
-  const sippGrossNeededToReach100k = Math.max(0, combinedTax.adjustedNetIncome - 100000);
+  // SIPP Optimization Logic
+  const adjustedNet = combinedTax.adjustedNetIncome;
+  
+  // 1. £100k Taper Recommendation
+  const sippGrossNeededToReach100k = Math.max(0, adjustedNet - 100000);
   const sippNetNeededToReach100k = sippGrossNeededToReach100k * 0.8;
+
+  // 2. 40% Threshold Recommendation (to keep £1000 PSA)
+  const sippGrossToStayBasic = Math.max(0, adjustedNet - (37700 + 12570));
+  const sippNetToStayBasic = sippGrossToStayBasic * 0.8;
 
   return {
     payeGross,
     payeTaxable,
     selfProfit,
+    annualSavingsInterest,
     niLiableSelfProfit,
     combinedTaxable,
     grossReliefAtSourcePension,
@@ -281,12 +333,17 @@ export function calculateTaxSummary(incomes: PayeIncome[], streams: SelfEmployme
     totalNi,
     sippGrossNeededToReach100k,
     sippNetNeededToReach100k,
+    sippGrossToStayBasic,
+    sippNetToStayBasic,
     employmentPensionTotal,
     employerPensionTotal,
     netAnnual,
     monthlyNet: netAnnual / 12,
     cashAnnual,
     cashMonthlyNet: cashAnnual / 12,
+    isHigherRate: combinedTax.isHigherRate,
+    psaAllowance: combinedTax.psaAllowance,
+    interestTax: combinedTax.interestTax,
   };
 }
 
@@ -505,7 +562,7 @@ function calculateInterestWithoutOverpayments(amount: number, annualRate: number
 }
 
 export type FinancialSnapshot = {
-  profile: { currentAge: number; retirementAge: number };
+  profile: { currentAge: number; retirementAge: number; pensionAccessAge: number };
   financialHealth: {
     monthlyExpenses: number;
     monthlySurplus: number;
@@ -513,21 +570,24 @@ export type FinancialSnapshot = {
       remaining: number; 
       monthlyPayment: number; 
       monthsToPayoff: number; 
-      willBePaidOffAtRetirement: boolean;
+      willBePaidOffAtRetirement: boolean; 
       ageAtPayoff: number;
     };
+  };
+  guaranteedIncome: {
+    statePension: { amount: number; age: number };
+    dbPensions: { label: string; amount: number; age: number }[];
+    other: { label: string; amount: number; age: number; isTaxable: boolean }[];
   };
   buckets: {
     id: string;
     type: string;
+    label: string;
     balance: number;
     projected: number;
     isTaxable: boolean;
-  }[];
-  incomeStreams: {
-    label: string;
-    amount: number;
-    isTaxable: boolean;
+    accessibleFromAge: number;
+    annualRate: number;
   }[];
 };
 
@@ -540,7 +600,10 @@ export function getFinancialSnapshot(
   mortgageSummary: any,
   mortgageInputs: MortgageInputs,
   savings: any[],
-  otherIncome: any[]
+  otherIncome: any[],
+  pensionAccessAge: number,
+  statePension: { amount: number; age: number },
+  dbPensions: { label: string; amount: number; age: number }[]
 ): FinancialSnapshot {
   const currentYear = new Date().getFullYear();
   const currentMonth = new Date().getMonth() + 1;
@@ -551,7 +614,7 @@ export function getFinancialSnapshot(
   const ageAtPayoff = currentAge + (mortgageSummary.payoffMonths / 12);
 
   return {
-    profile: { currentAge, retirementAge },
+    profile: { currentAge, retirementAge, pensionAccessAge },
     financialHealth: {
       monthlyExpenses: budgetExpenses,
       monthlySurplus: monthlySurplus,
@@ -563,18 +626,41 @@ export function getFinancialSnapshot(
         ageAtPayoff
       },
     },
-    buckets: savings.map(s => ({
-      id: s.id,
-      type: s.type,
-      balance: s.balance,
-      projected: s.projected || 0,
-      isTaxable: ['pension', 'workplace-private-pension', 'nhs-pension', 'civil-service-pension', 'teachers-pension'].includes(s.type),
-    })),
-    incomeStreams: otherIncome.map(i => ({
-      label: i.label,
-      amount: i.amount,
-      isTaxable: i.isTaxable || false,
-    }))
+    guaranteedIncome: {
+      statePension,
+      dbPensions,
+      other: otherIncome.map(i => ({
+        label: i.label,
+        amount: i.amount * 12,
+        age: i.startAge || 0,
+        isTaxable: i.isTaxable || false,
+      }))
+    },
+    buckets: savings.map(s => {
+      let accessibleFromAge = 0;
+      const type = s.type.toLowerCase();
+      if (type === 'lisa') {
+        accessibleFromAge = 60;
+      } else if (type === 'pension' || type === 'workplace-pension' || type === 'workplace-private-pension' || type.includes('pension')) {
+        // Special case for DB pensions which have their own age
+        if (['nhs-pension', 'civil-service-pension', 'teachers-pension'].includes(type)) {
+          accessibleFromAge = s.startWithdrawalAge || 67;
+        } else {
+          accessibleFromAge = pensionAccessAge;
+        }
+      }
+      
+      return {
+        id: s.id,
+        type: s.type,
+        label: s.label,
+        balance: s.balance,
+        projected: s.projected || 0,
+        isTaxable: type.includes('pension'),
+        accessibleFromAge,
+        annualRate: s.annualRate || 0
+      };
+    }),
   };
 }
 export function calculateRetirementGrossRequired(

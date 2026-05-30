@@ -57,7 +57,9 @@ export function updateItem<T extends { id: string }>(items: T[], id: string, pat
   return items.map((item) => (item.id === id ? { ...item, ...patch } : item));
 }
 
-export function TextInput({ value, onChange, placeholder }: { value: string; onChange: (value: string) => void; placeholder?: string }) {
+export const isMobile = window.innerWidth <= 600;
+
+function TextInput({ value, onChange, placeholder }: { value: string; onChange: (value: string) => void; placeholder?: string }) {
   return <input placeholder={placeholder} value={value} onChange={(event) => onChange(event.target.value)} />;
 }
 
@@ -79,7 +81,7 @@ export function NumberInput({ value, onChange, suffix, placeholder, max }: { val
   );
 }
 
-export function Metric({ label, value, tone = "neutral" }: { label: string; value: string; tone?: "neutral" | "green" | "amber" | "red" }) {
+export function Metric({ label, value, tone = "neutral" }: { label: string; value: string; tone?: string }) {
   return (
     <article className={`metric ${tone}`}>
       <span>{label}</span>
@@ -517,8 +519,8 @@ function App() {
   }, [savings]);
 
   const tax = useMemo(
-    () => calculateTaxSummary(paye, selfEmployment, { ...taxSettings, sippNetContribution: totalSippNet }),
-    [paye, selfEmployment, taxSettings, totalSippNet],
+    () => calculateTaxSummary(paye, selfEmployment, savings, { ...taxSettings, sippNetContribution: totalSippNet }),
+    [paye, selfEmployment, savings, taxSettings, totalSippNet],
   );
 
   const savingsForBudget = useMemo(
@@ -728,19 +730,20 @@ const projectionBuckets = useMemo(() => {
 
   
   const sections = [
-    { id: "overview", title: "Overview", value: monthlyMoney.format(overviewBudget.monthlySurplus), detail: "monthly surplus" },
-    { id: "income", title: "Income", value: money.format(tax.payeGross + tax.selfProfit), detail: "gross + profit" },
-    { id: "budget", title: "Budget", value: monthlyMoney.format(overviewBudget.monthlyOut), detail: "monthly outflow" },
+    { id: "overview", title: "Overview", value: monthlyMoney.format(overviewBudget.monthlySurplus), detail: "monthly surplus", color: "linear-gradient(135deg, #f0f7ff 0%, #ddebfa 100%)" },
+    { id: "income", title: "Income", value: money.format(tax.payeGross + tax.selfProfit), detail: "gross + profit", color: "linear-gradient(135deg, #f0fff4 0%, #e0f9e8 100%)" },
+    { id: "budget", title: "Budget", value: monthlyMoney.format(overviewBudget.monthlyOut), detail: "monthly outflow", color: "linear-gradient(135deg, #fffaf0 0%, #f8ecd4 100%)" },
     { 
       id: "savings", 
       title: "Savings", 
       value: money.format(projectedTotal), 
       subValue: "accessible",
       detail: money.format(accessibleProjectedTotal),
+      color: "linear-gradient(135deg, #f3e8ff 0%, #e8dded 100%)"
     },
-    { id: "mortgage", title: "Mortgage", value: `${mortgageSummary.payoffYears.toFixed(1)} yrs`, detail: "payoff estimate" },
-    { id: "retirement", title: "Retirement", value: monthlyMoney.format(retirementSummary.monthlyIn), detail: `${projectionYears.toFixed(2)} year projection`},
-  ] satisfies { id: SectionId; title: string; value: string; detail: string; subValue?: string; subLabel?: string }[];
+    { id: "mortgage", title: "Mortgage", value: `${mortgageSummary.payoffYears.toFixed(1)} yrs`, detail: "payoff estimate", color: "linear-gradient(135deg, #fff5f5 0%, #f7d9d9 100%)" },
+    { id: "retirement", title: "Retirement", value: monthlyMoney.format(retirementSummary.monthlyIn), detail: `${projectionYears.toFixed(2)} year projection`, color: "linear-gradient(135deg, #f5f3ff 0%, #ebe5ff 100%)"},
+  ] satisfies { id: SectionId; title: string; value: string; detail: string; color: string; subValue?: string; subLabel?: string }[];
 
   if (authLoading) return <div className="loading-screen">Loading application...</div>;
   if (!user) return <AuthScreen />;
@@ -795,10 +798,10 @@ const projectionBuckets = useMemo(() => {
       </section>
 
       <section className={`summary-grid ${activeSection !== "overview" ? "focus-mode" : ""}`}>
-        <Metric label="Annual net estimate" value={money.format(tax.netAnnual)} tone="green" />
-        <Metric label="Monthly net estimate" value={monthlyMoney.format(tax.monthlyNet)} />
-        <Metric label="Monthly expenses" value={monthlyMoney.format(budget.monthlyExpenses)} tone="amber" />
-        <Metric label="Monthly savings" value={monthlyMoney.format(budget.monthlySavings)} tone="green" />
+        <Metric label="Annual net estimate" value={money.format(tax.netAnnual)} tone="gold" />
+        <Metric label="Monthly net estimate" value={monthlyMoney.format(tax.monthlyNet)} tone="gold" />
+        <Metric label="Monthly expenses" value={monthlyMoney.format(budget.monthlyExpenses)} tone="gold red" />
+        <Metric label="Monthly savings" value={monthlyMoney.format(budget.monthlySavings)} tone="gold green" />
       </section>
 
       <nav className={`section-cards ${activeSection !== "overview" ? "focus-mode" : ""}`} aria-label="Finance sections">
@@ -808,6 +811,7 @@ const projectionBuckets = useMemo(() => {
               key={section.id}
               data-id={section.id}
               onClick={() => setActiveSection(section.id as SectionId)}
+              style={{ background: section.color, borderColor: activeSection === section.id ? '#24594f' : undefined }}
             >
               <span>{section.title}</span>
               <strong>{section.value}</strong>
@@ -853,6 +857,7 @@ const projectionBuckets = useMemo(() => {
           paye={paye} setPaye={setPaye}
           selfEmployment={selfEmployment} setSelfEmployment={setSelfEmployment}
           savings={savings} setSavings={setSavings}
+          taxSettings={taxSettings}
         />
       ) : null}
 
@@ -1295,13 +1300,13 @@ function RetirementSection({
       </section>
 
       <section className="panel span-12">
-        <details className="disclosure-section" open>
+        <details className="disclosure-section" open={!isMobile}>
           <summary><h2>Retirement Funding Analysis</h2></summary>
           <div className="disclosure-content">
             <div className="notice" style={{ marginBottom: '16px' }}>
               Select which current expenses and annual bills will continue into retirement.
             </div>
-            
+          </div>  
             <details style={{ marginBottom: '16px', border: '1px solid #eee', borderRadius: '8px' }}>
               <summary style={{ padding: '12px', fontSize: '0.85rem', fontWeight: 600, color: '#666', background: '#fafafa', borderRadius: '8px', cursor: 'pointer' }}>
                 View/Edit Retirement Expense List ({budgetLines.length + annualBills.length + additionalExpenses.length} items)
@@ -1336,7 +1341,7 @@ function RetirementSection({
                 <h4 style={{ margin: '20px 0 10px 0', fontSize: '0.8rem', color: '#24594f', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   ADDITIONAL RETIREMENT COSTS
                   <button 
-                    onClick={() => setAdditionalExpenses([...additionalExpenses, { id: uid(), label: "New Future Cost", amount: 0, bucket: 'living' }])}
+                    onClick={() => setAdditionalExpenses([...additionalExpenses, { id: uid(), label: "New Future Cost", amount: 0, bucket: 'living' as const }])}
                     style={{ fontSize: '0.7rem', height: '24px', minHeight: 'auto', padding: '0 8px' }}
                   >
                     + Add
@@ -1434,73 +1439,8 @@ function RetirementSection({
                     ["Estimated Annual Tax on Pots", -targetGrossSummary.totalAnnualTaxOnPots],
                   ]} />
                   
-                  <div style={{ marginTop: '16px', paddingTop: '16px', borderTop: '1px dashed #ccc' }}>
-                    <button 
-                      className={`wide-action ${isAnalyzing ? 'loading' : ''}`}
-                      disabled={isAnalyzing}
-                      onClick={async () => {
-                        setIsAnalyzing(true);
-                        setAnalysisResult(null);
-                        const snapshot = getFinancialSnapshot(birthYear, birthMonth, retirementAge, budgetExpenses, monthlySurplus, mortgageSummary, mortgage, projectedSavings, otherIncome);
-
-                        try {
-                          const model = getGenerativeModel(ai, { model: 'gemini-2.5-flash' });
-                          const prompt = `
-                            You are a senior UK retirement strategist. Perform a detailed retirement timeline analysis based on the provided financial snapshot.
-
-                            Your primary goals:
-                            1. **Earliest Retirement Age**: Determine the absolute earliest age the user can retire. To do this, analyze:
-                               - Drawdown pots (ISAs, SIPPs, etc.) and their projected growth.
-                               - Retirement expenses and additional expenses.
-                               - Guaranteed income: State Pension, NHS/Teachers/Civil Service pensions, and other income streams.
-                               - The required drawdown rate (currently ${drawdownRate}%).
-                            2. **Savings Strategy**: Analyze their current monthly surplus of ${money.format(monthlySurplus)}. 
-                               - Suggest how investing this surplus (e.g., into a SIPP for tax relief or a Stocks & Shares ISA for accessibility) could accelerate their retirement.
-                               - Provide a specific "What if" scenario (e.g., "If you invest £100/mo of your surplus into an ISA at 6% growth...").
-                            3. **Retirement Timeline & Bridge Strategy**: Create a step-by-step timeline explaining how to fund retirement expenses. 
-                               - Explain the sequence of pot drawdowns (e.g., Bridge from ISA until Pension access, then State Pension).
-                            4. **Mortgage Influence**: ${mortgage.amount > 0 ? `The user has a mortgage. Confirm if it is paid off by your proposed retirement age and how the ${money.format(mortgageSummary.standardPayment)}/mo payment (and any overpayments) affects their strategy.` : "The user has no mortgage information provided; do not mention mortgages."}
-
-                            Snapshot Data: ${JSON.stringify(snapshot)}
-
-                            Rules: 
-                            - Use **bold** for all currency and age figures.
-                            - Be specific, analytical, and encouraging.
-                            - Focus on the "Earliest Possible" scenario vs the "Current Plan".
-                          `;
-
-                          const result = await model.generateContent(prompt);
-                          setAnalysisResult(result.response.text());
-                        } catch (e: any) {
-                          console.error(e);
-                          setAnalysisResult("Analysis failed: " + e.message);
-                        } finally {
-                          setIsAnalyzing(false);
-                        }
-                      }}
-                    >
-                      {isAnalyzing ? "🤖 Strategy Engine Analysing..." : "✨ Analyze Retirement Strategy"}
-                    </button>
-
-                    {analysisResult && (
-                      <div className="callout ai-result" style={{ marginTop: '16px', padding: '20px', textAlign: 'left', lineHeight: '1.6' }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '16px', alignItems: 'center' }}>
-                          <h3 style={{ margin: 0, fontSize: '0.9rem', color: '#24594f', letterSpacing: '0.05em' }}>AI RETIREMENT STRATEGY</h3>
-                          <button 
-                            onClick={() => setAnalysisResult(null)}
-                            style={{ background: '#eee', color: '#666', border: 'none', padding: '4px 8px', borderRadius: '4px', cursor: 'pointer', fontSize: '0.7rem' }}
-                          >
-                            Dismiss
-                          </button>
-                        </div>
-                        <div className="markdown-content" style={{ fontSize: '0.85rem', color: '#333' }}>
-                          {analysisResult.split('\n').map((line, i) => (
-                            <p key={i} style={{ margin: '4px 0' }}>{line}</p>
-                          ))}
-                        </div>
-                      </div>
-                    )}                    <div className="retirement-comparison-grid">
-                      {retirementAge >= pensionAccessAge ? (
+                  <div className="retirement-comparison-grid">
+                    {retirementAge >= pensionAccessAge ? (
                         <div className={`metric pension-card ${pensionSurplus >= 0 ? 'green' : 'red'}`} style={{ minHeight: 'auto', padding: '12px' }}>
                           <span style={{ fontSize: '0.75rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                             Projected Pension Pot
@@ -1557,13 +1497,11 @@ function RetirementSection({
                           </small>
                         </div>
                       </div>
-                    </div>
-                  </div>
-              </div>
-            </div>
-          </div>
-        </details>
-      </section>
+                      </div>
+                      </div>
+                      </div>
+                      </details>
+                      </section>
 
       <section className="panel span-12">
         <details className="disclosure-section">
@@ -1668,7 +1606,7 @@ function RetirementSection({
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
               <h2>Other Income Sources</h2>
               <button 
-                onClick={(e) => { e.stopPropagation(); setOtherIncome([...otherIncome, {id: uid(), label: "Other Income", amount: 0, isTaxable: true, bucket: 'living'}]) }}
+                onClick={(e) => { e.stopPropagation(); setOtherIncome([...otherIncome, {id: uid(), label: "Other Income", amount: 0, isTaxable: true, bucket: 'living' as const}]) }}
                 style={{ 
                   fontSize: '0.7rem', 
                   height: '24px', 
@@ -1687,7 +1625,7 @@ function RetirementSection({
           </summary>
           <div className="disclosure-content">
             <div className="budget-lines">
-              <div className="budget-row header desktop-only">
+              <div className="income-source-row header desktop-only">
                 <span>Source</span>
                 <span>Monthly Amount</span>
                 <span>Start Age</span>
@@ -1696,7 +1634,7 @@ function RetirementSection({
                 <span></span>
               </div>
               {otherIncome.map((item: any) => (
-                <div key={item.id} className="budget-row">
+                <div key={item.id} className="income-source-row">
                   <div><div className="mobile-label">Source</div><TextInput placeholder="e.g. Rental Income" value={item.label} onChange={(l) => setOtherIncome(updateItem<any>(otherIncome, item.id, { label: l }))} /></div>
                   <div><div className="mobile-label">Monthly Gross Amount</div><NumberInput placeholder="0" value={item.amount} onChange={(a) => setOtherIncome(updateItem<any>(otherIncome, item.id, { amount: a }))} /></div>
                   <div><div className="mobile-label">Start Age</div><NumberInput placeholder="Retire Age" value={item.startAge || 0} onChange={(a) => setOtherIncome(updateItem<any>(otherIncome, item.id, { startAge: a }))} max={120} /></div>
@@ -1872,6 +1810,7 @@ function IncomeSection({
   setSelfEmployment,
   savings,
   setSavings,
+  taxSettings,
 }: {
   paye: PayeIncome[];
   setPaye: React.Dispatch<React.SetStateAction<PayeIncome[]>>;
@@ -1879,6 +1818,7 @@ function IncomeSection({
   setSelfEmployment: React.Dispatch<React.SetStateAction<SelfEmployment[]>>;
   savings: SavingsBucket[];
   setSavings: React.Dispatch<React.SetStateAction<SavingsBucket[]>>;
+  taxSettings: TaxSettings;
 }) {
   const hasNhsJob = paye.some(j => j.pensionType === 'nhs');
   const hasCivilServiceJob = paye.some(j => j.pensionType === 'civil-service');
@@ -1891,6 +1831,8 @@ function IncomeSection({
   const nhsJobsGross = paye.filter(j => j.pensionType === 'nhs').reduce((sum, j) => sum + j.gross, 0);
   const civilServiceJobsGross = paye.filter(j => j.pensionType === 'civil-service').reduce((sum, j) => sum + j.gross, 0);
   const teachersJobsGross = paye.filter(j => j.pensionType === 'teachers').reduce((sum, j) => sum + j.gross, 0);
+
+  const showPie = (paye.length + selfEmployment.length) > 1;
 
   const ensureNhsBucket = () => {
     if (!nhsBucket) {
@@ -1925,245 +1867,267 @@ function IncomeSection({
 
   return (
     <div className="workspace">
-      <section className="panel span-12">
-        <PanelHeader
-          title="PAYE Income"
-          actionLabel="Add PAYE"
-          onAction={() =>
-            setPaye([...paye, { id: uid(), label: "New PAYE job", gross: 0, pensionRate: 0, employerPensionContribution: 0, pensionType: "" as any }])
-          }
-        />
-        <div className="table income-table">
-          <div className="table-row header">
-            <span>PAYE income</span>
-            <span>Gross</span>
-            <span>Pension Type</span>
-            <span>Employee pension %</span>
-            <span>Employer pension %</span>
-            <span></span>
-          </div>
-          {paye.map((income) => (
-            <div className="table-row" key={income.id}>
-              <div><div className="mobile-label">Source</div><TextInput placeholder="e.g. Main Job" value={income.label} onChange={(label) => {
-                  setPaye(updateItem(paye, income.id, { label }));
-                  if (income.pensionType === 'standard') {
-                    setSavings(savings.map(s => s.id === income.id ? {...s, label: label + " Pension"} : s));
-                  }
-              }} /></div>
-              <div><div className="mobile-label">Gross</div><NumberInput placeholder="0" value={income.gross} onChange={(gross) => {
-                const patch: any = { gross };
-                if (income.pensionType === 'nhs') {
-                   patch.pensionRate = calculateNhsEmployeeRate(gross);
-                   patch.employerPensionContribution = (gross * NHS_EMPLOYER_RATE) / 100;
-                } else if (income.pensionType === 'standard') {
-                    const monthly = (gross * ((income.pensionRate || 0) + (income.employerPensionContribution || 0))) / 1200;
-                    setSavings(savings.map(s => s.id === income.id ? {...s, monthly} : s));
-                }
-                setPaye(updateItem(paye, income.id, patch));
-              }} /></div>
-              <div>
-                <div className="mobile-label">Pension Type</div>
-                <select value={income.pensionType || ""} onChange={(e) => {
-                  const val = e.target.value as any;
-                  const patch: any = { pensionType: val };
-                  if (val === 'nhs') {
-                    patch.pensionRate = calculateNhsEmployeeRate(income.gross);
-                    patch.employerPensionContribution = (income.gross * NHS_EMPLOYER_RATE) / 100;
-                    ensureNhsBucket();
-                  } else if (val === 'standard') {
-                    ensureWorkplacePensionBucket(income);
-                  } else if (val === 'civil-service') {
-                    ensureCivilServiceBucket();
-                  } else if (val === 'teachers') {
-                    ensureTeachersBucket();
-                  }
-                  setPaye(updateItem(paye, income.id, patch));
-                }}>
-                  <option value="" disabled>--select--</option>
-                  <option value="standard">Standard</option>
-                  <option value="nhs">NHS</option>
-                  <option value="civil-service">Civil Service</option>
-                  <option value="teachers">Teachers</option>
-                </select>
+      {showPie && (
+        <section className="panel span-4" style={{ gridRow: 'span 2' }}>
+          <h2>Income Distribution (Net)</h2>
+          <IncomePie paye={paye} selfEmployment={selfEmployment} taxSettings={taxSettings} />
+        </section>
+      )}
 
+      <section className={`panel ${showPie ? 'span-8' : 'span-12'}`}>
+        <details className="disclosure-section" open={!isMobile}>
+          <summary>
+            <PanelHeader
+              title="PAYE Income"
+              actionLabel="Add PAYE"
+              onAction={() =>
+                setPaye([...paye, { id: uid(), label: "New PAYE job", gross: 0, pensionRate: 0, employerPensionContribution: 0, pensionType: "" as any }])
+              }
+            />
+          </summary>
+          <div className="disclosure-content">
+            <div className="table income-table">
+              <div className="table-row header">
+                <span>PAYE income</span>
+                <span>Gross</span>
+                <span>Pension Type</span>
+                <span>Employee pension %</span>
+                <span>Employer pension %</span>
+                <span></span>
               </div>
-              <div><div className="mobile-label">Employee Pension %</div><NumberInput placeholder="0" value={income.pensionRate} onChange={(pensionRate) => {
-                  setPaye(updateItem(paye, income.id, { pensionRate }));
-                  if (income.pensionType === 'standard') {
-                      const monthly = (income.gross * (pensionRate + (income.employerPensionContribution || 0))) / 1200;
-                      setSavings(savings.map(s => s.id === income.id ? {...s, monthly} : s));
-                  }
-              }} suffix="%" /></div>
-              <div><div className="mobile-label">Employer Pension %</div><NumberInput placeholder="0" value={income.employerPensionContribution} onChange={(employerPensionContribution) => {
-                  setPaye(updateItem(paye, income.id, { employerPensionContribution }));
-                  if (income.pensionType === 'standard') {
-                      const monthly = (income.gross * ((income.pensionRate || 0) + employerPensionContribution)) / 1200;
-                      setSavings(savings.map(s => s.id === income.id ? {...s, monthly} : s));
-                  }
-              }} suffix="%" /></div>
-              <button className="delete-btn" onClick={() => setPaye(paye.filter((i: any) => i.id !== income.id))}>×</button>
+              {paye.map((income) => (
+                <div className="table-row" key={income.id}>
+                  <div><div className="mobile-label">Source</div><TextInput placeholder="e.g. Main Job" value={income.label} onChange={(label) => {
+                      setPaye(updateItem(paye, income.id, { label }));
+                      if (income.pensionType === 'standard') {
+                        setSavings(savings.map(s => s.id === income.id ? {...s, label: label + " Pension"} : s));
+                      }
+                  }} /></div>
+                  <div><div className="mobile-label">Gross</div><NumberInput placeholder="0" value={income.gross} onChange={(gross) => {
+                    const patch: any = { gross };
+                    if (income.pensionType === 'nhs') {
+                       patch.pensionRate = calculateNhsEmployeeRate(gross);
+                       patch.employerPensionContribution = (gross * NHS_EMPLOYER_RATE) / 100;
+                    } else if (income.pensionType === 'standard') {
+                        const monthly = (gross * ((income.pensionRate || 0) + (income.employerPensionContribution || 0))) / 1200;
+                        setSavings(savings.map(s => s.id === income.id ? {...s, monthly} : s));
+                    }
+                    setPaye(updateItem(paye, income.id, patch));
+                  }} /></div>
+                  <div>
+                    <div className="mobile-label">Pension Type</div>
+                    <select value={income.pensionType || ""} onChange={(e) => {
+                      const val = e.target.value as any;
+                      const patch: any = { pensionType: val };
+                      if (val === 'nhs') {
+                        patch.pensionRate = calculateNhsEmployeeRate(income.gross);
+                        patch.employerPensionContribution = (income.gross * NHS_EMPLOYER_RATE) / 100;
+                        ensureNhsBucket();
+                      } else if (val === 'standard') {
+                        ensureWorkplacePensionBucket(income);
+                      } else if (val === 'civil-service') {
+                        ensureCivilServiceBucket();
+                      } else if (val === 'teachers') {
+                        ensureTeachersBucket();
+                      }
+                      setPaye(updateItem(paye, income.id, patch));
+                    }}>
+                      <option value="" disabled>--select--</option>
+                      <option value="standard">Standard</option>
+                      <option value="nhs">NHS</option>
+                      <option value="civil-service">Civil Service</option>
+                      <option value="teachers">Teachers</option>
+                    </select>
+
+                  </div>
+                  <div><div className="mobile-label">Employee Pension %</div><NumberInput placeholder="0" value={income.pensionRate} onChange={(pensionRate) => {
+                      setPaye(updateItem(paye, income.id, { pensionRate }));
+                      if (income.pensionType === 'standard') {
+                          const monthly = (income.gross * (pensionRate + (income.employerPensionContribution || 0))) / 1200;
+                          setSavings(savings.map(s => s.id === income.id ? {...s, monthly} : s));
+                      }
+                  }} suffix="%" /></div>
+                  <div><div className="mobile-label">Employer Pension %</div><NumberInput placeholder="0" value={income.employerPensionContribution} onChange={(employerPensionContribution) => {
+                      setPaye(updateItem(paye, income.id, { employerPensionContribution }));
+                      if (income.pensionType === 'standard') {
+                          const monthly = (income.gross * ((income.pensionRate || 0) + employerPensionContribution)) / 1200;
+                          setSavings(savings.map(s => s.id === income.id ? {...s, monthly} : s));
+                      }
+                  }} suffix="%" /></div>
+                  <button className="delete-btn" onClick={() => setPaye(paye.filter((i: any) => i.id !== income.id))}>×</button>
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
+          </div>
+        </details>
+      </section>
+
+      <section className={`panel ${showPie ? 'span-8' : 'span-12'}`}>
+        <details className="disclosure-section" open={!isMobile}>
+          <summary>
+            <PanelHeader
+              title="Self-Employment Income"
+              actionLabel="Add SE Stream"
+              onAction={() =>
+                setSelfEmployment([...selfEmployment, { id: uid(), label: "New SE source", gross: 0, expenses: [], isNiLiable: true }])
+              }
+            />
+          </summary>
+          <div className="disclosure-content">
+            <div className="se-list">
+              {selfEmployment.map((stream) => (
+                <div className="se-card" key={stream.id}>
+                  <div className="se-card-header">
+                    <TextInput placeholder="Stream Label" value={stream.label} onChange={(label) => setSelfEmployment(updateItem(selfEmployment, stream.id, { label }))} />
+                    <button className="delete-btn" onClick={() => setSelfEmployment(selfEmployment.filter((s: any) => s.id !== stream.id))}>×</button>
+                  </div>
+                  <div className="se-card-body">
+                    <label>Annual Gross Revenue
+                      <NumberInput placeholder="0" value={stream.gross} onChange={(gross) => setSelfEmployment(updateItem(selfEmployment, stream.id, { gross }))} />
+                    </label>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
+                      <input type="checkbox" checked={stream.isNiLiable ?? true} onChange={(e) => setSelfEmployment(updateItem(selfEmployment, stream.id, { isNiLiable: e.target.checked }))} />
+                      <span style={{ fontSize: '0.85rem' }}>Liable for Class 4 NI?</span>
+                    </label>
+
+                    <div className="mini-expenses">
+                      <div className="mini-expenses-header">
+                        <h4>Annual Business Expenses</h4>
+                        <button onClick={() => {
+                          const expenses: ExpenseLine[] = [...stream.expenses, { id: uid(), label: "New expense", amount: 0, bucket: 'professional' as const }];
+                          setSelfEmployment(updateItem(selfEmployment, stream.id, { expenses }));
+                        }}>+ Add</button>
+                      </div>
+                      {stream.expenses.map((expense) => (
+                        <div key={expense.id} className="mini-expense-row">
+                          <TextInput placeholder="Expense label" value={expense.label} onChange={(l) => updateExpense(stream.id, expense.id, { label: l }, selfEmployment, setSelfEmployment)} />
+                          <NumberInput placeholder="0" value={expense.amount} onChange={(a) => updateExpense(stream.id, expense.id, { amount: a }, selfEmployment, setSelfEmployment)} />
+                          <button onClick={() => {
+                            const expenses = stream.expenses.filter((e: any) => e.id !== expense.id);
+                            setSelfEmployment(updateItem(selfEmployment, stream.id, { expenses }));
+                          }}>×</button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </details>
       </section>
 
       {hasNhsJob && (
-        <section className="panel span-12" style={{ background: '#f0f7ff', border: '2px dashed #3182ce' }}>
-          <div className="split-title">
-            <h2>NHS Pension Configuration</h2>
-            <div className="notice" style={{ maxWidth: 'none', border: 'none', padding: 0 }}>
-              Based on your NHS job(s), we need a few more details to estimate your retirement income.
-            </div>
-          </div>
-          {nhsBucket ? (
-            <div className="settings-grid">
-              <label>Total Years of Service (to date) 
-                <NumberInput placeholder="0" value={nhsBucket.nhsYearsService || 0} onChange={(val) => setSavings(updateItem(savings, nhsBucket.id, { nhsYearsService: val }))} />
-              </label>
-              <label>Pension Scheme
-                <select value={nhsBucket.nhsScheme || "2015"} onChange={(e) => setSavings(updateItem(savings, nhsBucket.id, { nhsScheme: e.target.value as any }))}>
-                  <option value="1995">1995 Scheme (1/80)</option>
-                  <option value="2008">2008 Scheme (1/60)</option>
-                  <option value="2015">2015 Scheme (1/54)</option>
-                </select>
-              </label>
-              <div style={{ gridColumn: 'span 2', fontSize: '0.85rem', color: '#4a5568', marginTop: '10px' }}>
-                <strong>Projected Annual Income:</strong> The system will use your combined NHS job salary ({money.format(nhsJobsGross)}) 
-                and project it forward until your retirement at age 67.
+        <section className={`panel ${showPie ? 'span-8' : 'span-12'}`} style={{ background: '#f0f7ff', border: '2px dashed #3182ce' }}>
+          <details className="disclosure-section" open={!isMobile}>
+            <summary>
+              <div className="split-title">
+                <h2>NHS Pension Configuration</h2>
+                <div className="notice" style={{ maxWidth: 'none', border: 'none', padding: 0 }}>
+                  Based on your NHS job(s), we need a few more details to estimate your retirement income.
+                </div>
               </div>
+            </summary>
+            <div className="disclosure-content">
+              {nhsBucket ? (
+                <div className="settings-grid">
+                  <label>Total Years of Service (to date) 
+                    <NumberInput placeholder="0" value={nhsBucket.nhsYearsService || 0} onChange={(val) => setSavings(updateItem(savings, nhsBucket.id, { nhsYearsService: val }))} />
+                  </label>
+                  <label>Pension Scheme
+                    <select value={nhsBucket.nhsScheme || "2015"} onChange={(e) => setSavings(updateItem(savings, nhsBucket.id, { nhsScheme: e.target.value as any }))}>
+                      <option value="1995">1995 Scheme (1/80)</option>
+                      <option value="2008">2008 Scheme (1/60)</option>
+                      <option value="2015">2015 Scheme (1/54)</option>
+                    </select>
+                  </label>
+                  <div style={{ gridColumn: 'span 2', fontSize: '0.85rem', color: '#4a5568', marginTop: '10px' }}>
+                    <strong>Projected Annual Income:</strong> The system will use your combined NHS job salary ({money.format(nhsJobsGross)}) 
+                    and project it forward until your retirement at age 67.
+                  </div>
+                </div>
+              ) : (
+                <button onClick={ensureNhsBucket}>Initialize NHS Pension Bucket</button>
+              )}
             </div>
-          ) : (
-            <button onClick={ensureNhsBucket}>Initialize NHS Pension Bucket</button>
-          )}
+          </details>
         </section>
       )}
 
       {hasCivilServiceJob && (
-        <section className="panel span-12" style={{ background: '#f6f1ff', border: '2px dashed #805ad5' }}>
-          <div className="split-title">
-            <h2>Civil Service Pension Configuration</h2>
-            <div className="notice" style={{ maxWidth: 'none', border: 'none', padding: 0 }}>
-              Provide details for your Civil Service pension estimation.
-            </div>
-          </div>
-          {civilServiceBucket ? (
-            <div className="settings-grid">
-              <label>Total Years of Service (to date) 
-                <NumberInput placeholder="0" value={civilServiceBucket.dbYearsService || 0} onChange={(val) => setSavings(updateItem(savings, civilServiceBucket.id, { dbYearsService: val }))} />
-              </label>
-              <label>Pension Scheme
-                <select value={civilServiceBucket.dbScheme || "alpha"} onChange={(e) => setSavings(updateItem(savings, civilServiceBucket.id, { dbScheme: e.target.value as any }))}>
-                  <option value="alpha">Alpha (2.32%)</option>
-                  <option value="classic">Classic (1/80)</option>
-                  <option value="premium">Premium/Nuvos (1/60)</option>
-                </select>
-              </label>
-              <div style={{ gridColumn: 'span 2', fontSize: '0.85rem', color: '#4a5568', marginTop: '10px' }}>
-                <strong>Projected Annual Income:</strong> The system will use your combined Civil Service salary ({money.format(civilServiceJobsGross)}) 
-                and project it forward until your retirement at age 67.
+        <section className={`panel ${showPie ? 'span-8' : 'span-12'}`} style={{ background: '#f6f1ff', border: '2px dashed #805ad5' }}>
+          <details className="disclosure-section" open={!isMobile}>
+            <summary>
+              <div className="split-title">
+                <h2>Civil Service Pension Configuration</h2>
+                <div className="notice" style={{ maxWidth: 'none', border: 'none', padding: 0 }}>
+                  Provide details for your Civil Service pension estimation.
+                </div>
               </div>
+            </summary>
+            <div className="disclosure-content">
+              {civilServiceBucket ? (
+                <div className="settings-grid">
+                  <label>Total Years of Service (to date) 
+                    <NumberInput placeholder="0" value={civilServiceBucket.dbYearsService || 0} onChange={(val) => setSavings(updateItem(savings, civilServiceBucket.id, { dbYearsService: val }))} />
+                  </label>
+                  <label>Pension Scheme
+                    <select value={civilServiceBucket.dbScheme || "alpha"} onChange={(e) => setSavings(updateItem(savings, civilServiceBucket.id, { dbScheme: e.target.value as any }))}>
+                      <option value="alpha">Alpha (2.32%)</option>
+                      <option value="classic">Classic (1/80)</option>
+                      <option value="premium">Premium/Nuvos (1/60)</option>
+                    </select>
+                  </label>
+                  <div style={{ gridColumn: 'span 2', fontSize: '0.85rem', color: '#4a5568', marginTop: '10px' }}>
+                    <strong>Projected Annual Income:</strong> The system will use your combined Civil Service salary ({money.format(civilServiceJobsGross)}) 
+                    and project it forward until your retirement at age 67.
+                  </div>
+                </div>
+              ) : (
+                <button onClick={ensureCivilServiceBucket}>Initialize Civil Service Pension Bucket</button>
+              )}
             </div>
-          ) : (
-            <button onClick={ensureCivilServiceBucket}>Initialize Civil Service Pension Bucket</button>
-          )}
+          </details>
         </section>
       )}
 
       {hasTeachersJob && (
-        <section className="panel span-12" style={{ background: '#fff5f5', border: '2px dashed #e53e3e' }}>
-          <div className="split-title">
-            <h2>Teachers' Pension Configuration</h2>
-            <div className="notice" style={{ maxWidth: 'none', border: 'none', padding: 0 }}>
-              Provide details for your Teachers' pension estimation.
-            </div>
-          </div>
-          {teachersBucket ? (
-            <div className="settings-grid">
-              <label>Total Years of Service (to date) 
-                <NumberInput placeholder="0" value={teachersBucket.dbYearsService || 0} onChange={(val) => setSavings(updateItem(savings, teachersBucket.id, { dbYearsService: val }))} />
-              </label>
-              <label>Pension Scheme
-                <select value={teachersBucket.dbScheme || "2015"} onChange={(e) => setSavings(updateItem(savings, teachersBucket.id, { dbScheme: e.target.value as any }))}>
-                  <option value="2015">TPS 2015 (1/57)</option>
-                  <option value="classic">TPS Final Salary (1/80)</option>
-                  <option value="60th">TPS Final Salary (1/60)</option>
-                </select>
-              </label>
-              <div style={{ gridColumn: 'span 2', fontSize: '0.85rem', color: '#4a5568', marginTop: '10px' }}>
-                <strong>Projected Annual Income:</strong> The system will use your combined Teachers salary ({money.format(teachersJobsGross)}) 
-                and project it forward until your retirement at age 67.
+        <section className={`panel ${showPie ? 'span-8' : 'span-12'}`} style={{ background: '#fff5f5', border: '2px dashed #e53e3e' }}>
+          <details className="disclosure-section" open={!isMobile}>
+            <summary>
+              <div className="split-title">
+                <h2>Teachers' Pension Configuration</h2>
+                <div className="notice" style={{ maxWidth: 'none', border: 'none', padding: 0 }}>
+                  Provide details for your Teachers' pension estimation.
+                </div>
               </div>
+            </summary>
+            <div className="disclosure-content">
+              {teachersBucket ? (
+                <div className="settings-grid">
+                  <label>Total Years of Service (to date) 
+                    <NumberInput placeholder="0" value={teachersBucket.dbYearsService || 0} onChange={(val) => setSavings(updateItem(savings, teachersBucket.id, { dbYearsService: val }))} />
+                  </label>
+                  <label>Pension Scheme
+                    <select value={teachersBucket.dbScheme || "2015"} onChange={(e) => setSavings(updateItem(savings, teachersBucket.id, { dbScheme: e.target.value as any }))}>
+                      <option value="classic">Classic (1/80)</option>
+                      <option value="80th">80th Scheme (1/80)</option>
+                      <option value="60th">60th Scheme (1/60)</option>
+                      <option value="2015">2015 Scheme (1/57)</option>
+                    </select>
+                  </label>
+                  <div style={{ gridColumn: 'span 2', fontSize: '0.85rem', color: '#4a5568', marginTop: '10px' }}>
+                    <strong>Projected Annual Income:</strong> The system will use your combined Teachers salary ({money.format(teachersJobsGross)}) 
+                    and project it forward until your retirement at age 67.
+                  </div>
+                </div>
+              ) : (
+                <button onClick={ensureTeachersBucket}>Initialize Teachers' Pension Bucket</button>
+              )}
             </div>
-          ) : (
-            <button onClick={ensureTeachersBucket}>Initialize Teachers' Pension Bucket</button>
-          )}
+          </details>
         </section>
       )}
-
-      <section className="panel span-12">
-        <PanelHeader
-          title="Self-employed Income"
-          actionLabel="Add stream"
-          onAction={() => setSelfEmployment([...selfEmployment, { id: uid(), label: "New stream", gross: 0, expenses: [] }])}
-        />
-        <div className="stream-grid">
-          {selfEmployment.map((stream) => {
-            const expenses = stream.expenses.reduce((sum, expense) => sum + expense.amount, 0);
-            return (
-              <article className="mini-panel" key={stream.id}>
-                <div className="split-title">
-                  <TextInput placeholder="e.g. Freelancing" value={stream.label} onChange={(label) => setSelfEmployment(updateItem(selfEmployment, stream.id, { label }))} />
-                  <button className="delete-btn" onClick={() => setSelfEmployment(selfEmployment.filter((s: any) => s.id !== stream.id))}>×</button>
-                </div>
-                <label>
-                  Gross income
-                  <NumberInput placeholder="0" value={stream.gross} onChange={(gross) => setSelfEmployment(updateItem(selfEmployment, stream.id, { gross }))} />
-                </label>
-                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.9rem', margin: '8px 0' }}>
-                  <input 
-                    type="checkbox" 
-                    checked={stream.isNiLiable ?? true} 
-                    onChange={(e) => setSelfEmployment(updateItem(selfEmployment, stream.id, { isNiLiable: e.target.checked }))} 
-                  />
-                  Liable to National Insurance?
-                </label>
-                <div className="expense-list">
-                  {stream.expenses.map((expense) => (
-                    <div className="expense-row" key={expense.id}>
-                      <TextInput
-                        placeholder="Expense label"
-                        value={expense.label}
-                        onChange={(label) => updateExpense(stream.id, expense.id, { label }, selfEmployment, setSelfEmployment)}
-                      />
-                      <NumberInput
-                        placeholder="0"
-                        value={expense.amount}
-                        onChange={(amount) => updateExpense(stream.id, expense.id, { amount }, selfEmployment, setSelfEmployment)}
-                      />
-                      <button className="delete-btn" onClick={() => setSelfEmployment(selfEmployment.map(s => s.id === stream.id ? {...s, expenses: s.expenses.filter((e: any) => e.id !== expense.id)} : s))}>×</button>
-                    </div>
-                  ))}
-                </div>
-                <button
-                  className="secondary"
-                  onClick={() =>
-                    setSelfEmployment(
-                      selfEmployment.map((item) =>
-                        item.id === stream.id
-                          ? { ...item, expenses: [...item.expenses, { id: uid(), label: "Expense", amount: 0, bucket: 'living' }] }
-                          : item,
-                      ),
-                    )
-                  }
-                >
-                  Add expense
-                </button>
-                <div className="mini-total">Profit {money.format(Math.max(0, stream.gross - expenses))}</div>
-              </article>
-            );
-          })}
-        </div>
-      </section>
     </div>
   );
 }
@@ -2171,12 +2135,20 @@ function IncomeSection({
 function TaxSection({ tax, sippNetContribution }: any) {
   const taxable = Number(tax.payeTaxable || 0);
   const selfEmployedProfit = Number(tax.selfProfit || 0);
+  const interestIncome = Number(tax.annualSavingsInterest || 0);
   const allowance = Number(tax.combinedTax?.allowance || 0);
-  
+  const psaAllowance = Number(tax.psaAllowance || 0);
+
   const taxableTotal = taxable + selfEmployedProfit;
   const adjustedNet = tax.combinedTax?.adjustedNetIncome || 0;
-  const sippNeeded = Math.max(0, adjustedNet - 100000);
-  
+
+  const sippNeededFor100k = tax.sippNetNeededToReach100k || 0;
+  const sippNeededForBasic = tax.sippNetToStayBasic || 0;
+
+  // Recommendations logic
+  const show100kRec = sippNeededFor100k > 0 && sippNeededFor100k < 40000; // Only show if realistically achievable
+  const showBasicRec = sippNeededForBasic > 0 && sippNeededForBasic < 10000; // Focus on those near the boundary
+
   return (
     <div className="workspace">
       <section className="panel span-12">
@@ -2185,15 +2157,19 @@ function TaxSection({ tax, sippNetContribution }: any) {
           rows={[
             ["PAYE taxable", money.format(taxable)],
             ["Self-employed profit", money.format(selfEmployedProfit)],
+            ["Savings interest (Non-ISA)", money.format(interestIncome)],
             ["Adjusted net income", money.format(adjustedNet)],
             ["Personal allowance", money.format(allowance)],
+            ["Personal savings allowance", money.format(psaAllowance)],
             ["Income tax", money.format(Number(tax.combinedTax?.totalTax || 0))],
+            ["Tax on interest", money.format(Number(tax.interestTax || 0))],
             ["National Insurance", money.format(Number(tax.totalNi || 0))],
             ["PAYE tax credited", money.format(Number(tax.assumedPayeTaxPaid || 0))],
             ["SIPP contribution (Net)", money.format(Number(sippNetContribution || 0))],
             ["SIPP contribution (Gross)", money.format(Number(sippNetContribution || 0) * 1.25)],
           ]}
         />
+
         <div style={{ marginTop: '20px' }}>
           {[
             { label: "Basic", pct: "20%", val: adjustedNet > 0 ? Math.min(100, (adjustedNet / 50270) * 100) : 0 },
@@ -2209,18 +2185,38 @@ function TaxSection({ tax, sippNetContribution }: any) {
             </div>
           ))}
         </div>
-        <div className="callout" style={{ marginTop: '20px', background: sippNeeded > 0 ? '#f6e05e' : '#e2e8f0', padding: '16px', borderRadius: '8px' }}>
-          <strong>SIPP Contribution</strong>: 
-          {sippNeeded > 0 
-            ? ` To bring your adjusted net income below £100,000, you need to contribute ${money.format(sippNeeded/12)} net a month (${money.format(sippNeeded * 1.25)} gross annually with govt contribution) to your SIPP.`
-            : " Your adjusted net income is currently below £100,000."
-          }
-        </div>
+
+        {(show100kRec || showBasicRec) && (
+          <div className="callout amber" style={{ marginTop: '24px' }}>
+            <h2>Optimization Advice</h2>
+            <div style={{ display: 'grid', gap: '12px', marginTop: '12px' }}>
+              {show100kRec && (
+                <div>
+                  <strong>Avoid 60% Tax Rate:</strong> Your income is over £100,000. 
+                  By contributing an extra <strong>{money.format(sippNeededFor100k)}</strong> (net) to your SIPP, 
+                  you can restore your full Personal Allowance and avoid the effective 60% tax rate.
+                </div>
+              )}
+              {showBasicRec && (
+                <div>
+                  <strong>Keep £1,000 Savings Allowance:</strong> You are currently in the 40% tax bracket. 
+                  By contributing an extra <strong>{money.format(sippNeededForBasic)}</strong> (net) to your SIPP, 
+                  you would drop back to the 20% bracket, which increases your Personal Savings Allowance from £500 to £1,000.
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {!show100kRec && !showBasicRec && (
+          <div className="callout" style={{ marginTop: '24px', background: '#e2e8f0' }}>
+            <strong>Tax Efficiency:</strong> Your adjusted net income is currently in a tax-efficient range relative to the major thresholds.
+          </div>
+        )}
       </section>
     </div>
   );
 }
-
 function SettingsSection({ taxSettings, setTaxSettings, birthYear, setBirthYear, birthMonth, setBirthMonth, tax }: any) {
   return (
     <div className="workspace">
@@ -2276,6 +2272,106 @@ function SettingsSection({ taxSettings, setTaxSettings, birthYear, setBirthYear,
           These details are used to calculate your current age and pension access dates.
         </p>
       </section>    </div>
+  );
+}
+
+function calculateJobNet(gross: number, type: "class1" | "class4", taxSettings: TaxSettings) {
+  const taxable = gross; // Simplified
+  const tax = calculateIncomeTax(taxable, taxSettings.taxCode, 0, taxSettings.region).totalTax;
+  const ni = calculateNationalInsurance(gross, type);
+  return gross - tax - ni;
+}
+
+function IncomePie({ paye, selfEmployment, taxSettings }: { paye: PayeIncome[], selfEmployment: SelfEmployment[], taxSettings: TaxSettings }) {
+  const palette = [
+    "#64cdba", // Teal
+    "#86a2df", // Blue
+    "#a26013", // Gold/Amber
+    "#5d675f", // Muted Green
+    "#250dbd", // Deep Blue
+    "#ab2cdd", // Purple
+    "#cd7625", // Orange
+    "#8a0d13", // Red
+    "#05da8c", // Bright Green
+    "#d4af37", // Metallic Gold
+  ];
+
+  const sources = [
+    ...paye.map((j, i) => ({ 
+      label: j.label, 
+      value: calculateJobNet(j.gross, "class1", taxSettings), 
+      color: palette[i % palette.length] 
+    })),
+    ...selfEmployment.map((s, i) => ({ 
+      label: s.label, 
+      value: calculateJobNet(s.gross, "class4", taxSettings), 
+      color: palette[(i + paye.length) % palette.length] 
+    }))
+  ].filter(s => s.value > 0);
+
+  const total = sources.reduce((sum, s) => sum + s.value, 0);
+
+  if (sources.length <= 1 || total === 0) return null;
+
+  let currentAngle = 0;
+  const radius = 75;
+  const cx = 100;
+  const cy = 100;
+
+  return (
+    <div className="donut-container" style={{ marginBottom: '20px' }}>
+      <div className="donut-svg-wrapper">
+        <svg viewBox="0 0 200 200" width="100%" height="100%">
+          {sources.map((src) => {
+            const percentage = src.value / total;
+            const angle = percentage * 360;
+            
+            // Handle full circle case
+            if (percentage >= 0.999) {
+              return (
+                <circle
+                  key={src.label}
+                  cx={cx}
+                  cy={cy}
+                  r={radius}
+                  fill={src.color}
+                />
+              );
+            }
+
+            const x1 = cx + radius * Math.cos((currentAngle - 90) * (Math.PI / 180));
+            const y1 = cy + radius * Math.sin((currentAngle - 90) * (Math.PI / 180));
+            const x2 = cx + radius * Math.cos((currentAngle + angle - 90) * (Math.PI / 180));
+            const y2 = cy + radius * Math.sin((currentAngle + angle - 90) * (Math.PI / 180));
+
+            const largeArcFlag = angle > 180 ? 1 : 0;
+            const pathData = `M ${cx} ${cy} L ${x1} ${y1} A ${radius} ${radius} 0 ${largeArcFlag} 1 ${x2} ${y2} Z`;
+
+            const segment = (
+              <path
+                key={src.label}
+                d={pathData}
+                fill={src.color}
+                stroke="#fff"
+                strokeWidth="1"
+              />
+            );
+
+            currentAngle += angle;
+            return segment;
+          })}
+        </svg>
+      </div>
+      <div className="donut-legend">
+        {sources.map((src) => (
+          <div key={src.label} className="legend-item">
+            <span className="legend-color" style={{ backgroundColor: src.color }}></span>
+            <span className="legend-label">{src.label}</span>
+            <span className="legend-value">{monthlyMoney.format(src.value / 12)}</span>
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -2402,9 +2498,9 @@ function BudgetSection({
       </section>
 
       <section className="panel span-8">
-        <details className="disclosure-section" open>
+        <details className="disclosure-section" open={!isMobile}>
           <summary>
-            <PanelHeader title="Monthly Expenses" actionLabel="Add expense" onAction={() => setBudgetLines([...budgetLines, { id: uid(), label: "New expense", amount: 0, bucket: "living" }])} />
+            <PanelHeader title="Monthly Expenses" actionLabel="Add expense" onAction={() => setBudgetLines([...budgetLines, { id: uid(), label: "New expense", amount: 0, bucket: "living" as const }])} />
           </summary>
           <div className="disclosure-content">
             <div className="budget-lines">
@@ -2437,9 +2533,9 @@ function BudgetSection({
       </section>
 
       <section className="panel span-8">
-        <details className="disclosure-section" open>
+        <details className="disclosure-section" open={!isMobile}>
           <summary>
-            <PanelHeader title="Annual Bills" actionLabel="Add annual bill" onAction={() => setAnnualBills([...annualBills, { id: uid(), label: "Annual bill", amount: 0, bucket: 'living' }])} />
+            <PanelHeader title="Annual Bills" actionLabel="Add annual bill" onAction={() => setAnnualBills([...annualBills, { id: uid(), label: "Annual bill", amount: 0, bucket: 'living' as const }])} />
           </summary>
           <div className="disclosure-content">
             <div className="budget-lines">
