@@ -47,7 +47,9 @@ import {
   calculateNhsEmployeeRate,
   NHS_EMPLOYER_RATE,
   calculateRetirementGrossRequired,
+  calculateCurrentBucketValue,
   getFinancialSnapshot,
+  isBucketAccessible,
   FinancialSnapshot,
 } from "./calculations";
 import "./styles.css";
@@ -739,10 +741,10 @@ const projectionBuckets = useMemo(() => {
       value: money.format(projectedTotal), 
       subValue: "accessible",
       detail: money.format(accessibleProjectedTotal),
-      color: "linear-gradient(135deg, #f3e8ff 0%, #e8dded 100%)"
+      color: "linear-gradient(135deg, #fffcf3 0%, #95cb99 100%)"
     },
     { id: "mortgage", title: "Mortgage", value: `${mortgageSummary.payoffYears.toFixed(1)} yrs`, detail: "payoff estimate", color: "linear-gradient(135deg, #fff5f5 0%, #f7d9d9 100%)" },
-    { id: "retirement", title: "Retirement", value: monthlyMoney.format(retirementSummary.monthlyIn), detail: `${projectionYears.toFixed(2)} year projection`, color: "linear-gradient(135deg, #f5f3ff 0%, #ebe5ff 100%)"},
+    { id: "retirement", title: "Retirement", value: monthlyMoney.format(retirementSummary.monthlyIn), detail: `${projectionYears.toFixed(2)} year projection`, color: "linear-gradient(135deg, #f3e8ff 0%, #e8dded 100%)"},
   ] satisfies { id: SectionId; title: string; value: string; detail: string; color: string; subValue?: string; subLabel?: string }[];
 
   if (authLoading) return <div className="loading-screen">Loading application...</div>;
@@ -890,8 +892,10 @@ const projectionBuckets = useMemo(() => {
             civilServiceJobsGross={civilServiceJobsGross}
             teachersJobsGross={teachersJobsGross}
             drawdownSettings={drawdownSettings}
-          />
-      ) : null}
+            birthYear={birthYear}
+            />
+            ) : null}
+
       {activeSection === "mortgage" ? (
         <MortgageSection mortgage={mortgage} setMortgage={setMortgage} mortgageSummary={mortgageSummary} />
       ) : null}
@@ -2602,21 +2606,101 @@ function BudgetSection({
   );
 }
 
+function WealthSummaryCard({ savings, currentAge }: { savings: SavingsBucket[], currentAge: number }) {
+  const summary = useMemo(() => {
+    return savings.reduce((acc, bucket) => {
+      const { currentValue, contributed, other } = calculateCurrentBucketValue(bucket);
+      const accessible = isBucketAccessible(bucket, currentAge);
+      
+      return {
+        totalValue: acc.totalValue + currentValue,
+        contributed: acc.contributed + contributed,
+        other: acc.other + other,
+        accessible: acc.accessible + (accessible ? currentValue : 0),
+        locked: acc.locked + (accessible ? 0 : currentValue),
+      };
+    }, { totalValue: 0, contributed: 0, other: 0, accessible: 0, locked: 0 });
+  }, [savings, currentAge]);
+
+  const total = summary.totalValue || 1;
+  const contribPct = (summary.contributed / total) * 100;
+  const otherPct = (summary.other / total) * 100;
+  
+  const accessiblePct = (summary.accessible / total) * 100;
+  const lockedPct = (summary.locked / total) * 100;
+
+  // Pie chart 1: Composition (Contributed vs Other)
+  const compositionChart = (
+    <svg viewBox="0 0 32 32" style={{ width: '60px', height: '60px', flexShrink: 0 }}>
+      <circle r="16" cx="16" cy="16" style={{ fill: '#ddebfa' }} />
+      <circle r="16" cx="16" cy="16" style={{ fill: '#24594f', strokeWidth: 32, strokeDasharray: `${contribPct} 100`, strokeDashoffset: 0 }} />
+      <circle r="16" cx="16" cy="16" style={{ fill: 'transparent', stroke: '#e67e22', strokeWidth: 32, strokeDasharray: `${otherPct} 100`, strokeDashoffset: -contribPct }} />
+    </svg>
+  );
+
+  // Pie chart 2: Liquidity (Accessible vs Locked)
+  const liquidityChart = (
+    <svg viewBox="0 0 32 32" style={{ width: '60px', height: '60px', flexShrink: 0 }}>
+      <circle r="16" cx="16" cy="16" style={{ fill: '#ddebfa' }} />
+      <circle r="16" cx="16" cy="16" style={{ fill: '#27ae60', strokeWidth: 32, strokeDasharray: `${accessiblePct} 100`, strokeDashoffset: 0 }} />
+      <circle r="16" cx="16" cy="16" style={{ fill: 'transparent', stroke: '#c0392b', strokeWidth: 32, strokeDasharray: `${lockedPct} 100`, strokeDashoffset: -accessiblePct }} />
+    </svg>
+  );
+
+  return (
+    <section className="panel span-6">
+      <h2>Wealth Summary</h2>
+      <div style={{ display: "flex", alignItems: "center", gap: "20px", marginBottom: "20px" }}>
+        {compositionChart}
+        <div style={{ flex: 1 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", paddingBottom: "10px", marginBottom: "10px", borderBottom: "1px solid #eee" }}>
+            <span>Total Value</span>
+            <strong>{money.format(summary.totalValue)}</strong>
+          </div>
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.85rem", color: "#24594f" }}>
+            <span>Contributed</span>
+            <span>{money.format(summary.contributed)}</span>
+          </div>
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.85rem", color: "#e67e22" }}>
+            <span>Other (Growth/Bonus)</span>
+            <span>{money.format(summary.other)}</span>
+          </div>
+        </div>
+      </div>
+      
+      <div style={{ display: "flex", alignItems: "center", gap: "20px" }}>
+        {liquidityChart}
+        <div style={{ flex: 1 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.85rem", color: "#27ae60" }}>
+            <span>Accessible</span>
+            <strong>{money.format(summary.accessible)}</strong>
+          </div>
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.85rem", color: "#c0392b" }}>
+            <span>Locked</span>
+            <strong>{money.format(summary.locked)}</strong>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function SavingsSection({
   savings, setSavings, projectionYears, setProjectionYears, projectedSavings, projectedTotal, allProjectedTotal,
   employmentPensionMonthly, employerPensionMonthly, nhsJobsGross, civilServiceJobsGross, teachersJobsGross,
-  drawdownSettings,
+  drawdownSettings, birthYear
 }: any) {
   const refs = useMemo(() => savings.reduce((acc: any, b: any) => ({ ...acc, [b.id]: React.createRef<HTMLDivElement>() }), {}), [savings]);
   return (
     <div className="workspace">
+      <WealthSummaryCard savings={savings} currentAge={2026 - birthYear} />
       <section className="panel span-12">
         <div className="split-title">
           <h2>Savings Manager</h2>
           <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
             <span style={{ fontSize: "0.9rem", color: "#666" }}>Projection Period:</span>
             <div style={{ width: "100px" }}>
-              <NumberInput placeholder="10" value={projectionYears} onChange={setProjectionYears} suffix="yrs" />
+              <NumberInput placeholder="10" value={parseFloat(projectionYears.toFixed(2))} onChange={setProjectionYears} suffix="yrs" />
             </div>
           </div>
         </div>
@@ -2642,6 +2726,8 @@ function SavingsSection({
                     </select>
                   </div>
                   <div><label>Balance</label><NumberInput placeholder="0" value={bucket.balance} onChange={(balance: number) => setSavings(updateItem(savings, bucket.id, { balance } as Partial<SavingsBucket>))} /></div>
+                  <div><label>Total Contributed</label><NumberInput placeholder="0" value={bucket.totalContributed || 0} onChange={(totalContributed: number) => setSavings(updateItem(savings, bucket.id, { totalContributed } as Partial<SavingsBucket>))} /></div>
+                  <div><label>Last Updated</label><input type="date" value={bucket.lastUpdated || ""} onChange={(e) => setSavings(updateItem(savings, bucket.id, { lastUpdated: e.target.value } as Partial<SavingsBucket>))} /></div>
                   <div><label>Monthly</label><NumberInput placeholder="0" value={parseFloat(bucket.monthly.toFixed(2))} onChange={(monthly: number) => setSavings(updateItem(savings, bucket.id, { monthly } as Partial<SavingsBucket>))} /></div>
                   <div><label>Growth %</label><NumberInput placeholder="0" value={bucket.annualRate} onChange={(annualRate: number) => setSavings(updateItem(savings, bucket.id, { annualRate } as Partial<SavingsBucket>))} suffix="%" /></div>
                 </div>
@@ -2653,6 +2739,7 @@ function SavingsSection({
         <button style={{ width: "100%" }} onClick={() => setSavings([...savings, { id: uid(), label: "New savings", balance: 0, monthly: 0, annualRate: 3, type: "cash" }])}>Add Savings Bucket</button></div></details>
       </section>
       {savings.filter((b: { type: any; }) => ['nhs-pension', 'civil-service-pension', 'teachers-pension'].includes(b.type)).length > 0 && (
+
         <section className="panel span-12">
             <h2>Expected Retirement Pension Income</h2>
             {savings.filter((b: { type: any; }) => ['nhs-pension', 'civil-service-pension', 'teachers-pension'].includes(b.type)).map((bucket: { type: string; nhsScheme: string; dbScheme: string; nhsSalary: any; dbSalary: any; nhsYearsService: any; dbYearsService: any; id: React.Key | null | undefined; label: string | number | bigint | boolean | React.ReactElement<unknown, string | React.JSXElementConstructor<any>> | Iterable<React.ReactNode> | React.ReactPortal | Promise<string | number | bigint | boolean | React.ReactPortal | React.ReactElement<unknown, string | React.JSXElementConstructor<any>> | Iterable<React.ReactNode> | null | undefined> | null | undefined; }) => {

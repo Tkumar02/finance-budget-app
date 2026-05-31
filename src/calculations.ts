@@ -47,6 +47,8 @@ export type SavingsBucket = {
   nhsSalary?: number;
   nhsYearsService?: number;
   nhsScheme?: "1995" | "2008" | "2015";
+  lastUpdated?: string;
+  totalContributed?: number;
 };
 
 export type MortgageInputs = {
@@ -83,6 +85,36 @@ const roundPounds = (value: number) => Math.round(value);
 export function clampNumber(value: number, min = 0) {
   if (!Number.isFinite(value)) return min;
   return Math.max(min, value);
+}
+
+export function calculateCurrentBucketValue(bucket: SavingsBucket): {
+  currentValue: number;
+  contributed: number;
+  other: number;
+} {
+  const currentValue = bucket.balance;
+  const contributed = bucket.totalContributed || bucket.balance;
+  const other = Math.max(0, currentValue - contributed);
+  
+  return {
+    currentValue,
+    contributed,
+    other,
+  };
+}
+
+export function isBucketAccessible(bucket: SavingsBucket, currentAge: number): boolean {
+  const type = bucket.type.toLowerCase();
+  
+  if (type === 'lisa') {
+    return currentAge >= 60;
+  }
+  if (type === 'pension' || type === 'workplace-pension' || type === 'workplace-private-pension' || type.includes('pension')) {
+    const age = bucket.startWithdrawalAge || 57; // Default pension age
+    return currentAge >= age;
+  }
+  
+  return true; // Cash/ISA are always accessible
 }
 
 export function parseTaxCodeAllowance(code: string) {
