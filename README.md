@@ -24,7 +24,12 @@ A comprehensive, private financial planning tool designed to provide a deep-dive
 *   **Smart Diversion Logic:** Handles complex contribution rules, such as diverting LISA contributions to an ISA or Cash bucket once the age 50 limit is reached.
 *   **Inflation Adjustment:** All projections can be viewed in "Today's Money" by factoring in a customizable inflation rate.
 
-### 4. Mortgage & Debt Analysis
+### 4. Wealth Tracking (New)
+*   **Explicit Capital Tracking:** Set your "Total Contributed" amount for each savings bucket to accurately distinguish between your capital investment and total growth.
+*   **Visual Wealth Composition:** Instant pie-chart breakdown of your total wealth: **Contributed Capital** vs. **Other (Growth/Bonus)**.
+*   **Liquidity Insights:** Visualize your wealth's availability via a second pie chart showing **Accessible** (e.g., ISA, Cash) vs. **Locked** (e.g., Pension, LISA) funds based on your current age.
+
+### 5. Mortgage & Debt Analysis
 *   **Payoff Tracking:** Calculate exactly when your mortgage will be cleared based on your current rate and term.
 *   **Overpayment Impact:** See how monthly or one-off overpayments reduce your total interest and shave years off your mortgage term.
 *   **Retirement Alignment:** Automatically flags whether your mortgage will be paid off before your target retirement age.

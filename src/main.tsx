@@ -45,6 +45,11 @@ import {
   projectSavings,
   requiredGrossForNet,
   calculateNhsEmployeeRate,
+  calculateCivilServiceEmployeeRate,
+  calculateTeachersEmployeeRate,
+  calculatePoliceEmployeeRate,
+  calculateFirefightersEmployeeRate,
+  calculateLgpsEmployeeRate,
   NHS_EMPLOYER_RATE,
   calculateRetirementGrossRequired,
   calculateCurrentBucketValue,
@@ -252,6 +257,91 @@ function App() {
 
   const STATE_PENSION_AGE = 67;
   const ANNUAL_STATE_PENSION = 11502.40; // 2024/25
+
+  const loadDemoScenario = (scenario: 'nurse' | 'banker' | 'plumber' | 'analyst') => {
+    if (!confirmUnsavedChanges()) return;
+    setCurrentPlanId(null);
+    
+    // Reset all state to defaults before seeding
+    setPaye([]);
+    setSelfEmployment([]);
+    setBudgetLines([]);
+    setAnnualBills([]);
+    setSavings([]);
+    setOtherRetirementIncome([]);
+    setAdditionalRetirementExpenses([]);
+
+    if (scenario === 'nurse') {
+      setPaye([
+        { id: uid(), label: "NHS Senior Nurse", gross: 48500, pensionType: "nhs", pensionRate: 9.8, employerPensionContribution: 23.7 },
+        { id: uid(), label: "Evening Tutoring", gross: 5000, pensionType: "standard", pensionRate: 5, employerPensionContribution: 3 }
+      ]);
+      setSelfEmployment([
+        { id: uid(), label: "Freelance Writing", gross: 12000, isNiLiable: true, expenses: [
+          { id: uid(), label: "Software", amount: 500, bucket: "professional" }
+        ]}
+      ]);
+      setTaxSettings(prev => ({ ...prev, includeStudentLoan: true }));
+      setSavings([
+        { id: uid(), label: "S&S ISA", balance: 25000, monthly: 250, annualRate: 7, type: "isa", totalContributed: 20000 },
+        { id: uid(), label: "Lifetime ISA", balance: 8000, monthly: 100, annualRate: 5, type: "lisa", totalContributed: 6000 },
+        { id: uid(), label: "NHS Pension", balance: 0, monthly: 0, annualRate: 0, type: "nhs-pension", dbScheme: "2015", dbYearsService: 5 }
+      ]);
+      setBirthYear(1992);
+      setProjectionYears(28);
+      alert("Scenario Loaded: 34-year-old NHS Nurse with side hustles.");
+    } else if (scenario === 'banker') {
+      setPaye([
+        { id: uid(), label: "Investment Director", gross: 165000, pensionType: "standard", pensionRate: 10, employerPensionContribution: 15 }
+      ]);
+      setSavings([
+        { id: uid(), label: "Main SIPP", balance: 850000, monthly: 2000, annualRate: 6, type: "pension", totalContributed: 400000 },
+        { id: uid(), label: "GIA (Cash)", balance: 150000, monthly: 0, annualRate: 4, type: "cash", totalContributed: 150000 },
+        { id: uid(), label: "Maxed ISA", balance: 240000, monthly: 1666, annualRate: 7, type: "isa", totalContributed: 180000 }
+      ]);
+      setBirthYear(1966);
+      setProjectionYears(5);
+      setTaxSettings(prev => ({ ...prev, includeStudentLoan: false }));
+      alert("Scenario Loaded: 60-year-old Banker with healthy assets.");
+    } else if (scenario === 'plumber') {
+      setSelfEmployment([
+        { id: uid(), label: "Plumbing Services", gross: 55000, isNiLiable: true, expenses: [
+          { id: uid(), label: "Van & Tools", amount: 8000, bucket: "professional" }
+        ]}
+      ]);
+      setSavings([
+        { id: uid(), label: "Armed Forces Pension", balance: 0, monthly: 0, annualRate: 0, type: "armed-forces-pension", dbScheme: "2015", dbYearsService: 10 },
+        { id: uid(), label: "Vanguard ISA", balance: 45000, monthly: 500, annualRate: 8, type: "isa", totalContributed: 35000 },
+        { id: uid(), label: "Emergency Fund", balance: 15000, monthly: 0, annualRate: 4, type: "cash", totalContributed: 15000 }
+      ]);
+      setBirthYear(1986);
+      setProjectionYears(25);
+      setTaxSettings(prev => ({ ...prev, includeStudentLoan: false }));
+      alert("Scenario Loaded: 40-year-old Plumber (ex-Armed Forces).");
+    } else if (scenario === 'analyst') {
+      setPaye([
+        { id: uid(), label: "Junior Data Analyst", gross: 32000, pensionType: "standard", pensionRate: 5, employerPensionContribution: 3 }
+      ]);
+      setTaxSettings(prev => ({ ...prev, includeStudentLoan: true }));
+      setSavings([
+        { id: uid(), label: "Workplace Pension", balance: 4500, monthly: 250, annualRate: 6, type: "workplace-private-pension", totalContributed: 4000 },
+        { id: uid(), label: "First Home Fund", balance: 2000, monthly: 200, annualRate: 5, type: "lisa", totalContributed: 2000 }
+      ]);
+      setBirthYear(2001);
+      setProjectionYears(42);
+      alert("Scenario Loaded: 25-year-old Analyst with student loans.");
+    }
+
+    setBudgetLines([
+      { id: uid(), label: "Groceries", amount: 450, bucket: "food", includeInRetirement: true },
+      { id: uid(), label: "Council Tax", amount: 160, bucket: "housing", includeInRetirement: true },
+      { id: uid(), label: "Energy", amount: 180, bucket: "housing", includeInRetirement: true }
+    ]);
+    setMortgage({ amount: 200000, annualRate: 4.2, years: 25, monthlyOverpayment: 0, oneOffMonth: 0, oneOffAmount: 0 });
+    setExpectedOutgoings(2500);
+    setDrawdownRate(4);
+    setInflationRate(3);
+  };
 
   const currentDataString = useMemo(() => JSON.stringify({
     paye,
@@ -579,7 +669,7 @@ const projectionBuckets = useMemo(() => {
   const isBucketAccessible = (type: string, age: number, startWithdrawalAge?: number) => {
     if (type === 'lisa') return age >= 60;
     if (type === 'pension' || type === 'workplace-private-pension') return age >= pensionAccessAge;
-    if (['nhs-pension', 'civil-service-pension', 'teachers-pension'].includes(type)) return age >= (startWithdrawalAge || 67);
+    if (['nhs-pension', 'civil-service-pension', 'teachers-pension', 'police-pension', 'firefighters-pension', 'armed-forces-pension', 'lgps-pension'].includes(type)) return age >= (startWithdrawalAge || 67);
     return true;
   };
 
@@ -606,6 +696,22 @@ const projectionBuckets = useMemo(() => {
     return paye.filter(j => j.pensionType === 'teachers').reduce((sum, j) => sum + j.gross, 0);
   }, [paye]);
 
+  const policeJobsGross = useMemo(() => {
+    return paye.filter(j => j.pensionType === 'police').reduce((sum, j) => sum + j.gross, 0);
+  }, [paye]);
+
+  const firefightersJobsGross = useMemo(() => {
+    return paye.filter(j => j.pensionType === 'firefighters').reduce((sum, j) => sum + j.gross, 0);
+  }, [paye]);
+
+  const armedForcesJobsGross = useMemo(() => {
+    return paye.filter(j => j.pensionType === 'armed-forces').reduce((sum, j) => sum + j.gross, 0);
+  }, [paye]);
+
+  const lgpsJobsGross = useMemo(() => {
+    return paye.filter(j => j.pensionType === 'lgps').reduce((sum, j) => sum + j.gross, 0);
+  }, [paye]);
+
   const retirementSummary = useMemo(() => {
     let totalAnnualGross = 0;
     let totalAnnualTaxable = 0;
@@ -617,63 +723,76 @@ const projectionBuckets = useMemo(() => {
       let annualIncome = 0;
       let taxableIncome = 0;
 
-      if (['nhs-pension', 'civil-service-pension', 'teachers-pension'].includes(bucket.type)) {
+      if (['nhs-pension', 'civil-service-pension', 'teachers-pension', 'police-pension', 'firefighters-pension', 'armed-forces-pension', 'lgps-pension'].includes(bucket.type)) {
         const effectiveWithdrawAge = settings.useWithdrawAge ? settings.withdrawAge : (bucket.startWithdrawalAge || 67);
-        if (!isBucketAccessible(bucket.type, retirementAge, effectiveWithdrawAge)) return;
-        
-        let salary = bucket.dbSalary || 0;
-        let baseYears = (bucket.dbYearsService || 0);
-        const effectiveStopAge = settings.useStopAge ? settings.stopAge : (bucket.stopContributingAge || 0);
-        let yearsUntilStop = effectiveStopAge ? Math.max(0, effectiveStopAge - (birthYear + (currentAge))) : projectionYears;
-        let yearsAtRetirement = baseYears + Math.min(projectionYears, yearsUntilStop);
-        let accrual = 54; // Default
+        if (isBucketAccessible(bucket.type, retirementAge, effectiveWithdrawAge)) {
+          let salary = bucket.dbSalary || 0;
+          let baseYears = (bucket.dbYearsService || 0);
+          const effectiveStopAge = settings.useStopAge ? settings.stopAge : (bucket.stopContributingAge || 0);
+          let yearsUntilStop = effectiveStopAge ? Math.max(0, effectiveStopAge - (birthYear + (currentAge))) : projectionYears;
+          let yearsAtRetirement = baseYears + Math.min(projectionYears, yearsUntilStop);
+          let accrual = 54; // Default
 
-        if (bucket.type === 'nhs-pension') {
-            salary = nhsJobsGross || bucket.nhsSalary || bucket.dbSalary || 0;
-            yearsAtRetirement = (bucket.nhsYearsService || bucket.dbYearsService || 0) + Math.min(projectionYears, yearsUntilStop);
-            const scheme = bucket.nhsScheme || bucket.dbScheme || "2015";
-            accrual = scheme === "1995" ? 80 : scheme === "2008" ? 60 : 54;
-        } else if (bucket.type === 'civil-service-pension') {
-            salary = civilServiceJobsGross || bucket.dbSalary || 0;
-            const scheme = bucket.dbScheme || "alpha";
-            accrual = scheme === "classic" ? 80 : (scheme === "premium" || scheme === "nuvos") ? 60 : 43.1; // alpha is 2.32% or 1/43.1
-        } else if (bucket.type === 'teachers-pension') {
-            salary = teachersJobsGross || bucket.dbSalary || 0;
-            const scheme = bucket.dbScheme || "2015";
-            accrual = (scheme === "classic" || scheme === "80th") ? 80 : scheme === "60th" ? 60 : 57; // 2015 is 1/57
+          if (bucket.type === 'nhs-pension') {
+              salary = nhsJobsGross || bucket.nhsSalary || bucket.dbSalary || 0;
+              yearsAtRetirement = (bucket.nhsYearsService || bucket.dbYearsService || 0) + Math.min(projectionYears, yearsUntilStop);
+              const scheme = bucket.nhsScheme || bucket.dbScheme || "2015";
+              accrual = scheme === "1995" ? 80 : scheme === "2008" ? 60 : 54;
+          } else if (bucket.type === 'civil-service-pension') {
+              salary = civilServiceJobsGross || bucket.dbSalary || 0;
+              const scheme = bucket.dbScheme || "alpha";
+              accrual = scheme === "classic" ? 80 : (scheme === "premium" || scheme === "nuvos") ? 60 : 43.1;
+          } else if (bucket.type === 'teachers-pension') {
+              salary = teachersJobsGross || bucket.dbSalary || 0;
+              const scheme = bucket.dbScheme || "2015";
+              accrual = (scheme === "classic" || scheme === "80th") ? 80 : scheme === "60th" ? 60 : 57;
+          } else if (bucket.type === 'police-pension') {
+              salary = policeJobsGross || bucket.dbSalary || 0;
+              accrual = 55.3;
+          } else if (bucket.type === 'firefighters-pension') {
+              salary = firefightersJobsGross || bucket.dbSalary || 0;
+              accrual = 59.7;
+          } else if (bucket.type === 'armed-forces-pension') {
+              salary = armedForcesJobsGross || bucket.dbSalary || 0;
+              accrual = 47;
+          } else if (bucket.type === 'lgps-pension') {
+              salary = lgpsJobsGross || bucket.dbSalary || 0;
+              accrual = 49;
+          }
+
+          annualIncome = (salary / accrual) * yearsAtRetirement;
+          taxableIncome = annualIncome;
         }
-
-        annualIncome = (salary / accrual) * yearsAtRetirement;
-        taxableIncome = annualIncome;
       } else {
         let val = bucket.projected;
         
         // 1. Calculate the 25% penalty if it's an early LISA withdrawal
         if (bucket.type === 'lisa' && retirementAge < 60) {
-          if (!showLisaUnder60) return; // Skip LISA if toggle is off
-          val = val * 0.75;
-        }
-
-        // 2. Only block the pot if it's NOT a LISA and it's currently inaccessible
-        if (bucket.type !== 'lisa' && !isBucketAccessible(bucket.type, retirementAge, bucket.startWithdrawalAge)) {
-          return;
-        }
-
-        // Calculate annual drawdown for this specific pot
-        annualIncome = val * (settings.rate / 100);
-        
-        // Tax logic
-        if (bucket.type === 'isa' || (bucket.type === 'lisa' && retirementAge >= 60)) {
-          taxableIncome = 0;
-        } else if (bucket.type === 'pension' || bucket.type === 'workplace-private-pension') {
-          if (settings.lumpSumTaken) {
-            taxableIncome = annualIncome;
+          if (showLisaUnder60) {
+            val = val * 0.75;
           } else {
-            taxableIncome = annualIncome * 0.75; // 25% tax free
+            val = 0;
           }
-        } else {
-           // Default for cash or other types if any
-           taxableIncome = 0; // Assuming cash is tax paid already
+        }
+
+        // 2. Calculate income if accessible
+        if (val > 0 && isBucketAccessible(bucket.type, retirementAge, bucket.startWithdrawalAge)) {
+          // Calculate annual drawdown for this specific pot
+          annualIncome = val * (settings.rate / 100);
+          
+          // Tax logic
+          if (bucket.type === 'isa' || (bucket.type === 'lisa' && retirementAge >= 60)) {
+            taxableIncome = 0;
+          } else if (bucket.type === 'pension' || bucket.type === 'workplace-private-pension') {
+            if (settings.lumpSumTaken) {
+              taxableIncome = annualIncome;
+            } else {
+              taxableIncome = annualIncome * 0.75; // 25% tax free
+            }
+          } else {
+             // Default for cash or other types if any
+             taxableIncome = 0; // Assuming cash is tax paid already
+          }
         }
       }
 
@@ -835,6 +954,7 @@ const projectionBuckets = useMemo(() => {
           birthYear={birthYear} setBirthYear={setBirthYear}
           birthMonth={birthMonth} setBirthMonth={setBirthMonth}
           tax={tax}
+          onLoadDemo={loadDemoScenario}
         />
       ) : null}
 
@@ -915,6 +1035,10 @@ const projectionBuckets = useMemo(() => {
           nhsJobsGross={nhsJobsGross}
           civilServiceJobsGross={civilServiceJobsGross}
           teachersJobsGross={teachersJobsGross}
+          policeJobsGross={policeJobsGross}
+          firefightersJobsGross={firefightersJobsGross}
+          armedForcesJobsGross={armedForcesJobsGross}
+          lgpsJobsGross={lgpsJobsGross}
           pensionAccessAge={pensionAccessAge}
           projectionYears={projectionYears}
           setProjectionYears={setProjectionYears}
@@ -967,6 +1091,10 @@ function RetirementSection({
   nhsJobsGross,
   civilServiceJobsGross,
   teachersJobsGross,
+  policeJobsGross,
+  firefightersJobsGross,
+  armedForcesJobsGross,
+  lgpsJobsGross,
   pensionAccessAge,
   projectionYears,
   setProjectionYears,
@@ -1012,6 +1140,10 @@ function RetirementSection({
   nhsJobsGross: number;
   civilServiceJobsGross: number;
   teachersJobsGross: number;
+  policeJobsGross: number;
+  firefightersJobsGross: number;
+  armedForcesJobsGross: number;
+  lgpsJobsGross: number;
   pensionAccessAge: number;
   projectionYears: number;
   setProjectionYears: (y: number) => void;
@@ -1064,9 +1196,9 @@ function RetirementSection({
       }
     });
 
-    // B. Defined Benefit (DB) Pensions (NHS/Civil Service/Teachers)
+    // B. Defined Benefit (DB) Pensions (NHS/Civil Service/Teachers/Police/Fire/AF/LGPS)
     projectedSavings.forEach((bucket) => {
-      if (['nhs-pension', 'civil-service-pension', 'teachers-pension'].includes(bucket.type)) {
+      if (['nhs-pension', 'civil-service-pension', 'teachers-pension', 'police-pension', 'firefighters-pension', 'armed-forces-pension', 'lgps-pension'].includes(bucket.type)) {
         const settings = drawdownSettings[bucket.id] || { rate: 4, lumpSumTaken: false, useStopAge: false, useWithdrawAge: false, stopAge: 60, withdrawAge: 60 };
         const effectiveWithdrawAge = settings.useWithdrawAge ? settings.withdrawAge : (bucket.startWithdrawalAge || 67);
         
@@ -1094,6 +1226,18 @@ function RetirementSection({
               salary = teachersJobsGross || bucket.dbSalary || 0;
               const scheme = bucket.dbScheme || "2015";
               accrual = (scheme === "classic" || scheme === "80th") ? 80 : scheme === "60th" ? 60 : 57;
+          } else if (bucket.type === 'police-pension') {
+              salary = policeJobsGross || bucket.dbSalary || 0;
+              accrual = 55.3;
+          } else if (bucket.type === 'firefighters-pension') {
+              salary = firefightersJobsGross || bucket.dbSalary || 0;
+              accrual = 59.7;
+          } else if (bucket.type === 'armed-forces-pension') {
+              salary = armedForcesJobsGross || bucket.dbSalary || 0;
+              accrual = 47;
+          } else if (bucket.type === 'lgps-pension') {
+              salary = lgpsJobsGross || bucket.dbSalary || 0;
+              accrual = 49;
           }
 
           let annualDbIncome = (salary / accrual) * yearsAtRetirement;
@@ -1694,6 +1838,7 @@ function RetirementSection({
           drawdownSettings={drawdownSettings} 
           retirementAge={retirementAge} 
           pensionAccessAge={pensionAccessAge} 
+          inflationRate={inflationRate}
         />
       </section>
     </div>
@@ -1785,7 +1930,7 @@ function OverviewSection({
             <strong>{money.format(tax.sippGrossNeededToReach100k)} gross</strong>
             <span>
               extra gross SIPP contribution estimated to bring adjusted net income to GBP 100,000. You would normally
-              pay about {money.format(tax.sippNetNeededToReach100k)} net into a relief-at-source SIPP. Current net SIPP
+              pay about {money.format(tax.sippNetNeededToReach100k/12)} net per month into a relief-at-source SIPP. Current net SIPP
               input is {money.format(sippNetContribution)}.
             </span>
           </div>
@@ -1831,10 +1976,18 @@ function IncomeSection({
   const nhsBucket = savings.find(s => s.type === 'nhs-pension');
   const civilServiceBucket = savings.find(s => s.type === 'civil-service-pension');
   const teachersBucket = savings.find(s => s.type === 'teachers-pension');
+  const policeBucket = savings.find(s => s.type === 'police-pension');
+  const firefightersBucket = savings.find(s => s.type === 'firefighters-pension');
+  const armedForcesBucket = savings.find(s => s.type === 'armed-forces-pension');
+  const lgpsBucket = savings.find(s => s.type === 'lgps-pension');
 
   const nhsJobsGross = paye.filter(j => j.pensionType === 'nhs').reduce((sum, j) => sum + j.gross, 0);
   const civilServiceJobsGross = paye.filter(j => j.pensionType === 'civil-service').reduce((sum, j) => sum + j.gross, 0);
   const teachersJobsGross = paye.filter(j => j.pensionType === 'teachers').reduce((sum, j) => sum + j.gross, 0);
+  const policeJobsGross = paye.filter(j => j.pensionType === 'police').reduce((sum, j) => sum + j.gross, 0);
+  const firefightersJobsGross = paye.filter(j => j.pensionType === 'firefighters').reduce((sum, j) => sum + j.gross, 0);
+  const armedForcesJobsGross = paye.filter(j => j.pensionType === 'armed-forces').reduce((sum, j) => sum + j.gross, 0);
+  const lgpsJobsGross = paye.filter(j => j.pensionType === 'lgps').reduce((sum, j) => sum + j.gross, 0);
 
   const showPie = (paye.length + selfEmployment.length) > 1;
 
@@ -1853,6 +2006,30 @@ function IncomeSection({
   const ensureTeachersBucket = () => {
     if (!teachersBucket) {
       setSavings([...savings, { id: uid(), label: "Teachers' Pension", balance: 0, monthly: 0, annualRate: 0, type: "teachers-pension", dbScheme: "2015", dbYearsService: 0 }]);
+    }
+  };
+
+  const ensurePoliceBucket = () => {
+    if (!policeBucket) {
+      setSavings([...savings, { id: uid(), label: "Police Pension", balance: 0, monthly: 0, annualRate: 0, type: "police-pension", dbScheme: "2015", dbYearsService: 0 }]);
+    }
+  };
+
+  const ensureFirefightersBucket = () => {
+    if (!firefightersBucket) {
+      setSavings([...savings, { id: uid(), label: "Firefighters' Pension", balance: 0, monthly: 0, annualRate: 0, type: "firefighters-pension", dbScheme: "2015", dbYearsService: 0 }]);
+    }
+  };
+
+  const ensureArmedForcesBucket = () => {
+    if (!armedForcesBucket) {
+      setSavings([...savings, { id: uid(), label: "Armed Forces Pension", balance: 0, monthly: 0, annualRate: 0, type: "armed-forces-pension", dbScheme: "2015", dbYearsService: 0 }]);
+    }
+  };
+
+  const ensureLgpsBucket = () => {
+    if (!lgpsBucket) {
+      setSavings([...savings, { id: uid(), label: "LGPS Pension", balance: 0, monthly: 0, annualRate: 0, type: "lgps-pension", dbScheme: "Main", dbYearsService: 0 }]);
     }
   };
 
@@ -1911,7 +2088,25 @@ function IncomeSection({
                     const patch: any = { gross };
                     if (income.pensionType === 'nhs') {
                        patch.pensionRate = calculateNhsEmployeeRate(gross);
-                       patch.employerPensionContribution = (gross * NHS_EMPLOYER_RATE) / 100;
+                       patch.employerPensionContribution = NHS_EMPLOYER_RATE;
+                    } else if (income.pensionType === 'civil-service') {
+                       patch.pensionRate = calculateCivilServiceEmployeeRate(gross);
+                       patch.employerPensionContribution = 28.97;
+                    } else if (income.pensionType === 'teachers') {
+                       patch.pensionRate = calculateTeachersEmployeeRate(gross);
+                       patch.employerPensionContribution = 28.6;
+                    } else if (income.pensionType === 'police') {
+                       patch.pensionRate = calculatePoliceEmployeeRate(gross);
+                       patch.employerPensionContribution = 35.3;
+                    } else if (income.pensionType === 'firefighters') {
+                       patch.pensionRate = calculateFirefightersEmployeeRate(gross);
+                       patch.employerPensionContribution = 37.6;
+                    } else if (income.pensionType === 'armed-forces') {
+                       patch.pensionRate = 0;
+                       patch.employerPensionContribution = 73.5;
+                    } else if (income.pensionType === 'lgps') {
+                       patch.pensionRate = calculateLgpsEmployeeRate(gross);
+                       patch.employerPensionContribution = 20.0; // LGPS varies significantly by authority; 20% is a common benchmark
                     } else if (income.pensionType === 'standard') {
                         const monthly = (gross * ((income.pensionRate || 0) + (income.employerPensionContribution || 0))) / 1200;
                         setSavings(savings.map(s => s.id === income.id ? {...s, monthly} : s));
@@ -1925,14 +2120,34 @@ function IncomeSection({
                       const patch: any = { pensionType: val };
                       if (val === 'nhs') {
                         patch.pensionRate = calculateNhsEmployeeRate(income.gross);
-                        patch.employerPensionContribution = (income.gross * NHS_EMPLOYER_RATE) / 100;
+                        patch.employerPensionContribution = NHS_EMPLOYER_RATE;
                         ensureNhsBucket();
-                      } else if (val === 'standard') {
-                        ensureWorkplacePensionBucket(income);
                       } else if (val === 'civil-service') {
+                        patch.pensionRate = calculateCivilServiceEmployeeRate(income.gross);
+                        patch.employerPensionContribution = 28.97;
                         ensureCivilServiceBucket();
                       } else if (val === 'teachers') {
+                        patch.pensionRate = calculateTeachersEmployeeRate(income.gross);
+                        patch.employerPensionContribution = 28.6;
                         ensureTeachersBucket();
+                      } else if (val === 'police') {
+                        patch.pensionRate = calculatePoliceEmployeeRate(income.gross);
+                        patch.employerPensionContribution = 35.3;
+                        ensurePoliceBucket();
+                      } else if (val === 'firefighters') {
+                        patch.pensionRate = calculateFirefightersEmployeeRate(income.gross);
+                        patch.employerPensionContribution = 37.6;
+                        ensureFirefightersBucket();
+                      } else if (val === 'armed-forces') {
+                        patch.pensionRate = 0;
+                        patch.employerPensionContribution = 73.5;
+                        ensureArmedForcesBucket();
+                      } else if (val === 'lgps') {
+                        patch.pensionRate = calculateLgpsEmployeeRate(income.gross);
+                        patch.employerPensionContribution = 20.0;
+                        ensureLgpsBucket();
+                      } else if (val === 'standard') {
+                        ensureWorkplacePensionBucket(income);
                       }
                       setPaye(updateItem(paye, income.id, patch));
                     }}>
@@ -1941,6 +2156,10 @@ function IncomeSection({
                       <option value="nhs">NHS</option>
                       <option value="civil-service">Civil Service</option>
                       <option value="teachers">Teachers</option>
+                      <option value="police">Police</option>
+                      <option value="firefighters">Firefighters</option>
+                      <option value="armed-forces">Armed Forces</option>
+                      <option value="lgps">LGPS</option>
                     </select>
 
                   </div>
@@ -2204,7 +2423,7 @@ function TaxSection({ tax, sippNetContribution }: any) {
               {showBasicRec && (
                 <div>
                   <strong>Keep £1,000 Savings Allowance:</strong> You are currently in the 40% tax bracket. 
-                  By contributing an extra <strong>{money.format(sippNeededForBasic)}</strong> (net) to your SIPP, 
+                  By contributing an extra <strong>{money.format(sippNeededForBasic)}</strong> (net) annually to your SIPP, 
                   you would drop back to the 20% bracket, which increases your Personal Savings Allowance from £500 to £1,000.
                 </div>
               )}
@@ -2221,11 +2440,31 @@ function TaxSection({ tax, sippNetContribution }: any) {
     </div>
   );
 }
-function SettingsSection({ taxSettings, setTaxSettings, birthYear, setBirthYear, birthMonth, setBirthMonth, tax }: any) {
+function SettingsSection({ taxSettings, setTaxSettings, birthYear, setBirthYear, birthMonth, setBirthMonth, tax, onLoadDemo }: any) {
   return (
     <div className="workspace">
       <section className="panel span-6">
-        <h2>Tax Settings</h2>
+        <div className="split-title">
+          <h2>Tax Settings</h2>
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <select 
+              className="secondary" 
+              style={{ fontSize: '0.75rem', height: '32px', width: 'auto' }}
+              onChange={(e) => {
+                if (e.target.value) {
+                  onLoadDemo(e.target.value as any);
+                  e.target.value = ""; // Reset select
+                }
+              }}
+            >
+              <option value="">Seed Demo...</option>
+              <option value="nurse">34y Nurse (NHS)</option>
+              <option value="banker">60y Banker (Wealthy)</option>
+              <option value="plumber">40y Plumber (Ex-AF)</option>
+              <option value="analyst">25y Analyst (Student Loan)</option>
+            </select>
+          </div>
+        </div>
         <div className="settings-grid">
           <label>
             Tax code
@@ -2611,23 +2850,42 @@ function WealthSummaryCard({ savings, currentAge }: { savings: SavingsBucket[], 
     return savings.reduce((acc, bucket) => {
       const { currentValue, contributed, other } = calculateCurrentBucketValue(bucket);
       const accessible = isBucketAccessible(bucket, currentAge);
-      
+
+      if (accessible) {
+        if (bucket.type === 'cash') acc.accessibleBreakdown.cash += currentValue;
+        else if (bucket.type === 'isa') acc.accessibleBreakdown.isa += currentValue;
+        else if (bucket.type === 'lisa') acc.accessibleBreakdown.lisa += currentValue;
+      }
+
       return {
         totalValue: acc.totalValue + currentValue,
         contributed: acc.contributed + contributed,
         other: acc.other + other,
         accessible: acc.accessible + (accessible ? currentValue : 0),
         locked: acc.locked + (accessible ? 0 : currentValue),
+        accessibleBreakdown: acc.accessibleBreakdown,
       };
-    }, { totalValue: 0, contributed: 0, other: 0, accessible: 0, locked: 0 });
+    }, { 
+      totalValue: 0, 
+      contributed: 0, 
+      other: 0, 
+      accessible: 0, 
+      locked: 0,
+      accessibleBreakdown: { cash: 0, isa: 0, lisa: 0 }
+    });
   }, [savings, currentAge]);
 
   const total = summary.totalValue || 1;
   const contribPct = (summary.contributed / total) * 100;
   const otherPct = (summary.other / total) * 100;
-  
+
   const accessiblePct = (summary.accessible / total) * 100;
   const lockedPct = (summary.locked / total) * 100;
+
+  const accessibleTotal = summary.accessibleBreakdown.cash + summary.accessibleBreakdown.isa + summary.accessibleBreakdown.lisa || 1;
+  const cashPct = (summary.accessibleBreakdown.cash / accessibleTotal) * 100;
+  const isaPct = (summary.accessibleBreakdown.isa / accessibleTotal) * 100;
+  const lisaPct = (summary.accessibleBreakdown.lisa / accessibleTotal) * 100;
 
   // Pie chart 1: Composition (Contributed vs Other)
   const compositionChart = (
@@ -2647,37 +2905,75 @@ function WealthSummaryCard({ savings, currentAge }: { savings: SavingsBucket[], 
     </svg>
   );
 
+  // Pie chart 3: Accessible Breakdown (Cash vs ISA vs LISA)
+  const accessibleBreakdownChart = (
+    <svg viewBox="0 0 32 32" style={{ width: '60px', height: '60px', flexShrink: 0 }}>
+      <circle r="16" cx="16" cy="16" style={{ fill: '#ddebfa' }} />
+      <circle r="16" cx="16" cy="16" style={{ fill: '#3498db', strokeWidth: 32, strokeDasharray: `${cashPct} 100`, strokeDashoffset: 0 }} />
+      <circle r="16" cx="16" cy="16" style={{ fill: 'transparent', stroke: '#9b59b6', strokeWidth: 32, strokeDasharray: `${isaPct} 100`, strokeDashoffset: -cashPct }} />
+      <circle r="16" cx="16" cy="16" style={{ fill: 'transparent', stroke: '#f1c40f', strokeWidth: 32, strokeDasharray: `${lisaPct} 100`, strokeDashoffset: -(cashPct + isaPct) }} />
+    </svg>
+  );
+
   return (
-    <section className="panel span-6">
-      <h2>Wealth Summary</h2>
-      <div style={{ display: "flex", alignItems: "center", gap: "20px", marginBottom: "20px" }}>
-        {compositionChart}
-        <div style={{ flex: 1 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", paddingBottom: "10px", marginBottom: "10px", borderBottom: "1px solid #eee" }}>
-            <span>Total Value</span>
-            <strong>{money.format(summary.totalValue)}</strong>
-          </div>
-          <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.85rem", color: "#24594f" }}>
-            <span>Contributed</span>
-            <span>{money.format(summary.contributed)}</span>
-          </div>
-          <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.85rem", color: "#e67e22" }}>
-            <span>Other (Growth/Bonus)</span>
-            <span>{money.format(summary.other)}</span>
+    <section className="panel span-12" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '20px' }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
+        <h2>Wealth Summary</h2>
+        <div style={{ display: "flex", alignItems: "center", gap: "20px" }}>
+          {compositionChart}
+          <div style={{ flex: 1 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", paddingBottom: "10px", marginBottom: "10px", borderBottom: "1px solid #eee" }}>
+              <span>Total Value</span>
+              <strong>{money.format(summary.totalValue)}</strong>
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.85rem", color: "#24594f" }}>
+              <span>Contributed</span>
+              <span>{money.format(summary.contributed)}</span>
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.85rem", color: "#e67e22" }}>
+              <span>Other (Growth/Bonus)</span>
+              <span>{money.format(summary.other)}</span>
+            </div>
           </div>
         </div>
       </div>
-      
-      <div style={{ display: "flex", alignItems: "center", gap: "20px" }}>
-        {liquidityChart}
-        <div style={{ flex: 1 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.85rem", color: "#27ae60" }}>
-            <span>Accessible</span>
-            <strong>{money.format(summary.accessible)}</strong>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
+        <h2>Liquidity</h2>
+        <div style={{ display: "flex", alignItems: "center", gap: "20px" }}>
+          {liquidityChart}
+          <div style={{ flex: 1 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.85rem", color: "#27ae60" }}>
+              <span>Accessible</span>
+              <strong>{money.format(summary.accessible)}</strong>
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.85rem", color: "#c0392b" }}>
+              <span>Locked</span>
+              <strong>{money.format(summary.locked)}</strong>
+            </div>
           </div>
-          <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.85rem", color: "#c0392b" }}>
-            <span>Locked</span>
-            <strong>{money.format(summary.locked)}</strong>
+        </div>
+      </div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
+        <h2>Accessible Breakdown</h2>
+        <div style={{ display: "flex", alignItems: "center", gap: "20px" }}>
+          {accessibleBreakdownChart}
+          <div style={{ flex: 1 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.85rem", color: "#3498db" }}>
+              <span>Cash</span>
+              <strong>{money.format(summary.accessibleBreakdown.cash)}</strong>
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.85rem", color: "#9b59b6" }}>
+              <span>ISA</span>
+              <strong>{money.format(summary.accessibleBreakdown.isa)}</strong>
+            </div>
+            { (currentAge >= 60 || summary.accessibleBreakdown.lisa > 0) && (
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.85rem", color: "#f1c40f" }}>
+                <span>LISA</span>
+                <strong>{money.format(summary.accessibleBreakdown.lisa)}</strong>
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -2704,7 +3000,7 @@ function SavingsSection({
             </div>
           </div>
         </div>
-        <details className="disclosure-section" style={{ marginBottom: "16px", border: "1px solid #e7e0d5", borderRadius: "8px" }} open><summary style={{ padding: "16px", background: "#fcfaf6", cursor: "pointer", fontWeight: 600 }}>Manage Individual Savings</summary><div style={{ padding: "16px" }}>{savings.map((bucket: SavingsBucket) => (
+        <details className="disclosure-section" style={{ marginBottom: "16px", border: "1px solid #e7e0d5", borderRadius: "8px" }}><summary style={{ padding: "16px", background: "#fcfaf6", cursor: "pointer", fontWeight: 600 }}>Manage Individual Savings</summary><div style={{ padding: "16px" }}>{savings.map((bucket: SavingsBucket) => (
           <div key={bucket.id} ref={refs[bucket.id]}>
             <details className="disclosure-section" style={{ marginBottom: "16px", border: "1px solid #e7e0d5", borderRadius: "8px", overflow: "hidden" }}>
               <summary style={{ padding: "16px", background: "#fcfaf6", cursor: "pointer", fontWeight: 600, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -2906,7 +3202,15 @@ function DepletionChart({ projectedSavings, drawdownSettings, retirementAge, pen
   if (data[0].buckets.length === 0) return null; 
   return (
     <div className='depletion-chart' style={{ marginTop: '24px' }}>
-      <h3>Pot Depletion Projection</h3>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
+        <h3 style={{ margin: 0 }}>Pot Depletion Projection</h3>
+        <span 
+          className="tooltip-trigger" 
+          data-tooltip={`Growth Assumption: Once retirement starts, all pots are assumed to grow at your Inflation Rate (${inflationRate}%) as investments typically shift to safer, capital-preserving assets.\n\nDepletion: This chart shows how long your pots last based solely on your chosen drawdown rates, independent of your total retirement costs.`}
+        >
+          ⓘ
+        </span>
+      </div>
       {/* <div style={{ marginBottom: '16px', fontSize: '0.8rem', color: '#666', fontStyle: 'italic' }}>
         * Starting values reflect your accumulated savings plus growth from age {Math.round(retirementAge - (projectedSavings[0]?.contributed > 0 ? (projectedSavings[0]?.projected / (projectedSavings[0]?.monthly * 12 || 1)) : 0))} until retirement.
       </div> */}

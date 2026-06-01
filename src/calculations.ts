@@ -6,7 +6,7 @@ export type PayeIncome = {
   gross: number;
   pensionRate: number;
   employerPensionContribution: number;
-  pensionType?: "standard" | "nhs" | "civil-service" | "teachers";
+  pensionType?: "standard" | "nhs" | "civil-service" | "teachers" | "police" | "firefighters" | "armed-forces" | "lgps";
 };
 
 export type ExpenseLine = {
@@ -37,7 +37,7 @@ export type SavingsBucket = {
   balance: number;
   monthly: number;
   annualRate: number;
-  type: "cash" | "isa" | "pension" | "lisa" | "workplace-private-pension" | "nhs-pension" | "civil-service-pension" | "teachers-pension";
+  type: "cash" | "isa" | "pension" | "lisa" | "workplace-private-pension" | "nhs-pension" | "civil-service-pension" | "teachers-pension" | "police-pension" | "firefighters-pension" | "armed-forces-pension" | "lgps-pension";
   isHidden?: boolean;
   stopContributingAge?: number;
   startWithdrawalAge?: number;
@@ -171,13 +171,58 @@ export function personalAllowance(adjustedNetIncome: number, taxCode: string) {
 
 export function calculateNhsEmployeeRate(gross: number) {
   const annual = clampNumber(gross);
-  if (annual <= 13247) return 5.2;
-  if (annual <= 17673) return 6.5;
-  if (annual <= 24022) return 8.3;
-  if (annual <= 25146) return 9.8;
-  if (annual <= 30638) return 10.7;
-  if (annual <= 45996) return 12.5;
-  return 13.5;
+  if (annual <= 13259) return 5.2;
+  if (annual <= 27797) return 6.5;
+  if (annual <= 33868) return 8.3;
+  if (annual <= 50845) return 9.8;
+  if (annual <= 65190) return 10.7;
+  return 12.5;
+}
+
+export function calculateCivilServiceEmployeeRate(gross: number) {
+  const annual = clampNumber(gross);
+  if (annual <= 34799) return 4.60;
+  if (annual <= 56000) return 5.45;
+  if (annual <= 150000) return 7.35;
+  return 8.05;
+}
+
+export function calculateTeachersEmployeeRate(gross: number) {
+  const annual = clampNumber(gross);
+  if (annual <= 34872.99) return 7.4;
+  if (annual <= 46943.99) return 8.9;
+  if (annual <= 55660.99) return 9.9;
+  if (annual <= 73768.99) return 10.5;
+  if (annual <= 100590.99) return 11.6;
+  return 12.0;
+}
+
+export function calculatePoliceEmployeeRate(gross: number) {
+  const annual = clampNumber(gross);
+  if (annual <= 27000) return 12.44;
+  if (annual <= 60000) return 13.44;
+  return 13.78;
+}
+
+export function calculateFirefightersEmployeeRate(gross: number) {
+  const annual = clampNumber(gross);
+  if (annual <= 27818) return 11.0;
+  if (annual <= 51515) return 12.9;
+  if (annual <= 142500) return 13.5;
+  return 14.5;
+}
+
+export function calculateLgpsEmployeeRate(gross: number) {
+  const annual = clampNumber(gross);
+  if (annual <= 17800) return 5.5;
+  if (annual <= 28000) return 5.8;
+  if (annual <= 45600) return 6.5;
+  if (annual <= 57700) return 6.8;
+  if (annual <= 81000) return 8.5;
+  if (annual <= 114800) return 9.9;
+  if (annual <= 135300) return 10.5;
+  if (annual <= 203000) return 11.4;
+  return 12.5;
 }
 
 export const NHS_EMPLOYER_RATE = 23.7;
