@@ -4,9 +4,7 @@ import { createRoot } from "react-dom/client";
 import {
   auth,
   db,
-  ai,
 } from "./firebase";
-import { getGenerativeModel } from "firebase/ai";
 import {
   onAuthStateChanged,
   signInWithEmailAndPassword,
@@ -1168,9 +1166,6 @@ function RetirementSection({
   statePensionAge: number;
   annualStatePension: number;
 }) {
-  const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [analysisResult, setAnalysisResult] = useState<string | null>(null);
-
   const hasAnyLisa = projectedSavings.some((b: any) => b.type === 'lisa');
   const hasActiveLisa = projectedSavings.some((b: any) => b.type === 'lisa' && (drawdownSettings[b.id]?.enabled ?? true));
 
