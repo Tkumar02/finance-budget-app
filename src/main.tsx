@@ -229,6 +229,8 @@ function App() {
     sippNetContribution: 0,
   });
   const [budgetLines, setBudgetLines] = useState(initialBudget);
+  const [excludedBudgetLines, setExcludedBudgetLines] = useState<string[]>([]);
+  const [excludedSavings, setExcludedSavings] = useState<string[]>([]);
   const [annualBills, setAnnualBills] = useState(initialAnnualBills);
   const [savings, setSavings] = useState(initialSavings);
   const [projectionYears, setProjectionYears] = useState(10);
@@ -626,6 +628,23 @@ const projectionBuckets = useMemo(() => {
     [tax.monthlyNet, budgetLines, annualBills, savingsForBudget, mortgage.monthlyOverpayment],
   );
 
+  const filteredBudgetLines = useMemo(() => {
+    return budgetLines.filter(l => !excludedBudgetLines.includes(l.id));
+  }, [budgetLines, excludedBudgetLines]);
+
+  const filteredSavingsForBudget = useMemo(() => {
+    return savingsForBudget.filter(s => !excludedSavings.includes(s.id));
+  }, [savingsForBudget, excludedSavings]);
+
+  const activeMortgageOverpayment = useMemo(() => {
+    return !excludedSavings.includes('mortgage-overpayment') ? mortgage.monthlyOverpayment : 0;
+  }, [excludedSavings, mortgage.monthlyOverpayment]);
+
+  const includedBudget = useMemo(
+    () => budgetSummary(tax.monthlyNet, filteredBudgetLines, annualBills, filteredSavingsForBudget, activeMortgageOverpayment),
+    [tax.monthlyNet, filteredBudgetLines, annualBills, filteredSavingsForBudget, activeMortgageOverpayment],
+  );
+
   // Adjusted budget for overview to include the tax set-aside
   const monthlyTaxSetAside = tax.selfTaxTotal / 12;
   const overviewBudget = useMemo(() => {
@@ -645,13 +664,13 @@ const projectionBuckets = useMemo(() => {
   const mortgageSummary = useMemo(() => calculateMortgage(mortgage), [mortgage]);
   const targetGross = useMemo(
     () => requiredGrossForNet(
-      Math.max(0, budget.monthlyOut * 12), 
+      Math.max(0, includedBudget.monthlyOut * 12), 
       taxSettings.taxCode, 
       taxSettings.region,
       taxSettings.includeStudentLoan,
       taxSettings.pensionRate
     ),
-    [budget.monthlyOut, taxSettings],
+    [includedBudget.monthlyOut, taxSettings],
   );
   const projectedTotal = projectedSavings.reduce((sum, bucket) => {
     return bucket.isHidden ? sum : sum + bucket.projected;
@@ -970,6 +989,13 @@ const projectionBuckets = useMemo(() => {
          setActiveSection={setActiveSection}
          taxSettings={taxSettings}
          setTaxSettings={setTaxSettings}
+         budgetLines={budgetLines}
+         excludedBudgetLines={excludedBudgetLines}
+         setExcludedBudgetLines={setExcludedBudgetLines}
+         savings={savingsForBudget}
+         excludedSavings={excludedSavings}
+         setExcludedSavings={setExcludedSavings}
+         mortgage={mortgage}
        />
       ) : null}
       {activeSection === "income" ? (
@@ -1849,6 +1875,13 @@ function OverviewSection({
   setActiveSection,
   taxSettings,
   setTaxSettings,
+  budgetLines,
+  excludedBudgetLines,
+  setExcludedBudgetLines,
+  savings,
+  excludedSavings,
+  setExcludedSavings,
+  mortgage,
 }: {
   budget: any;
   tax: ReturnType<typeof calculateTaxSummary>;
@@ -1858,6 +1891,13 @@ function OverviewSection({
   setActiveSection: (section: SectionId) => void;
   taxSettings: TaxSettings;
   setTaxSettings: (s: TaxSettings) => void;
+  budgetLines: BudgetLine[];
+  excludedBudgetLines: string[];
+  setExcludedBudgetLines: (ids: string[]) => void;
+  savings: SavingsBucket[];
+  excludedSavings: string[];
+  setExcludedSavings: (ids: string[]) => void;
+  mortgage: MortgageInputs;
 }) {
   const [showPensionInput, setShowPensionInput] = useState(!!taxSettings.pensionRate);
 
@@ -1872,9 +1912,75 @@ function OverviewSection({
             ["Monthly expenses", -budget.monthlyExpenses],
             ["Monthly savings", -budget.monthlySavings],
             ["Monthly surplus", budget.monthlySurplus],
-            ["Gross income needed for current plan", targetGross],
           ]}
         />
+      </section>
+
+      <section className="panel span-8" style={{ marginTop: '20px' }}>
+        <h2>Gross Income Analysis</h2>
+        <ResultRows
+          rows={[
+            ["Gross income needed for selected lines", targetGross],
+          ]}
+        />
+        
+        <details className="disclosure-section" style={{ marginTop: '20px' }}>
+          <summary>Included Budget & Savings Lines</summary>
+          <div className="disclosure-content">
+            <h4>Budget Lines</h4>
+            {budgetLines.map(line => (
+              <label key={line.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 0' }}>
+                <input
+                  type="checkbox"
+                  checked={!excludedBudgetLines.includes(line.id)}
+                  onChange={(e) => {
+                    if (e.target.checked) {
+                      setExcludedBudgetLines(excludedBudgetLines.filter(id => id !== line.id));
+                    } else {
+                      setExcludedBudgetLines([...excludedBudgetLines, line.id]);
+                    }
+                  }}
+                />
+                {line.label} ({monthlyMoney.format(line.amount)})
+              </label>
+            ))}
+            <h4 style={{marginTop: '15px'}}>Savings & Overpayments</h4>
+            {savings.map(s => (
+              <label key={s.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 0' }}>
+                <input
+                  type="checkbox"
+                  checked={!excludedSavings.includes(s.id)}
+                  onChange={(e) => {
+                    if (e.target.checked) {
+                      setExcludedSavings(excludedSavings.filter(id => id !== s.id));
+                    } else {
+                      setExcludedSavings([...excludedSavings, s.id]);
+                    }
+                  }}
+                />
+                {s.label} ({monthlyMoney.format(s.monthly)})
+              </label>
+            ))}
+            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 0', fontWeight: 'bold' }}>
+              <input
+                type="checkbox"
+                checked={!excludedSavings.includes('mortgage-overpayment')}
+                onChange={(e) => {
+                  if (e.target.checked) {
+                    setExcludedSavings(excludedSavings.filter(id => id !== 'mortgage-overpayment'));
+                  } else {
+                    setExcludedSavings([...excludedSavings, 'mortgage-overpayment']);
+                  }
+                }}
+              />
+              Mortgage Overpayment ({monthlyMoney.format(mortgage.monthlyOverpayment)})
+            </label>
+          </div>
+        </details>
+
+        <div style={{ marginTop: '16px', fontSize: '0.85rem', color: '#666', borderTop: '1px solid #eee', paddingTop: '12px' }}>
+          <p><strong>Note:</strong> Gross income calculation includes Income Tax and National Insurance deductions, plus any optional deductions selected below.</p>
+        </div>
         
         <div className="calculation-settings" style={{ marginTop: '20px', padding: '16px', backgroundColor: '#f9fafb', borderRadius: '8px', border: '1px solid #e5e7eb' }}>
           <h4 style={{ margin: '0 0 12px 0', fontSize: '0.9rem', color: '#374151' }}>Calculation Options</h4>
