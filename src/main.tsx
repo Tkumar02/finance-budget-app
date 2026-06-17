@@ -36,6 +36,7 @@ import {
   calculateIncomeTax,
   calculateNationalInsurance,
   calculateMortgage,
+  calculateCoastFire,
   calculateMortgageUpdate,
   calculateTaxSummary,
   clampNumber,
@@ -90,11 +91,12 @@ export function NumberInput({ value, onChange, suffix, placeholder, max }: { val
   );
 }
 
-export function Metric({ label, value, tone = "neutral" }: { label: string; value: string; tone?: string }) {
+export function Metric({ label, value, tone = "neutral", detail }: { label: string; value: string; tone?: string; detail?: string }) {
   return (
     <article className={`metric ${tone}`}>
       <span>{label}</span>
       <strong>{value}</strong>
+      {detail && <small style={{ fontSize: '0.65rem', display: 'block', marginTop: '4px', opacity: 0.8 }}>{detail}</small>}
     </article>
   );
 }
@@ -123,7 +125,7 @@ export function ResultRows({ rows }: { rows: [string, string | number][] }) {
 }
 
 // ... rest of imports ...
-type SectionId = "overview" | "income" | "tax" | "budget" | "savings" | "mortgage" | "retirement" | "profile" | "settings";
+type SectionId = "overview" | "income" | "tax" | "budget" | "savings" | "mortgage" | "retirement" | "coastfire" | "profile" | "settings";
 
 
 type Plan = {
@@ -152,6 +154,10 @@ type Plan = {
     retirementTaxableFraction?: number;
     showLisaUnder60?: boolean;
     includeStatePension?: boolean;
+    showMortgageCard?: boolean;
+    showCoastFireCard?: boolean;
+    swr?: number;
+    realGrowth?: number;
   };
 };
 
@@ -258,6 +264,10 @@ function App() {
   const [retirementTaxableFraction, setRetirementTaxableFraction] = useState(0.75);
   const [showLisaUnder60, setShowLisaUnder60] = useState(true);
   const [includeStatePension, setIncludeStatePension] = useState(true);
+  const [showMortgageCard, setShowMortgageCard] = useState(true);
+  const [showCoastFireCard, setShowCoastFireCard] = useState(false);
+  const [swr, setSwr] = useState(4);
+  const [realGrowth, setRealGrowth] = useState(3);
 
   const [pendingContributions, setPendingContributions] = useState<{bucketId: string, count: number, totalAmount: number}[]>([]);
   const [pendingMortgageUpdate, setPendingMortgageUpdate] = useState<{months: number, newBalance: number, payments: number} | null>(null);
@@ -446,12 +456,16 @@ function App() {
     retirementTaxableFraction,
     showLisaUnder60,
     includeStatePension,
+    showMortgageCard,
+    showCoastFireCard,
+    swr,
+    realGrowth,
   }), [
     paye, selfEmployment, taxSettings, budgetLines, annualBills, savings,
     projectionYears, mortgage, birthYear, birthMonth, expectedOutgoings,
     drawdownRate, otherRetirementIncome, drawdownSettings, inflationRate,
     additionalRetirementExpenses, retirementTaxableFraction, showLisaUnder60,
-    includeStatePension,
+    includeStatePension, showMortgageCard, showCoastFireCard, swr, realGrowth
   ]);
 
   const [lastSavedData, setLastSavedData] = useState<string>(currentDataString);
@@ -535,6 +549,10 @@ function App() {
     setRetirementTaxableFraction(d.retirementTaxableFraction ?? 0.75);
     setShowLisaUnder60(d.showLisaUnder60 ?? true);
     setIncludeStatePension(d.includeStatePension ?? true);
+    setShowMortgageCard(d.showMortgageCard ?? true);
+    setShowCoastFireCard(d.showCoastFireCard ?? false);
+    setSwr(d.swr ?? 4);
+    setRealGrowth(d.realGrowth ?? 3);
     
     // Normalize and set lastSavedData
     setLastSavedData(JSON.stringify({
@@ -557,6 +575,10 @@ function App() {
       retirementTaxableFraction: d.retirementTaxableFraction ?? 0.75,
       showLisaUnder60: d.showLisaUnder60 ?? true,
       includeStatePension: d.includeStatePension ?? true,
+      showMortgageCard: d.showMortgageCard ?? true,
+      showCoastFireCard: d.showCoastFireCard ?? false,
+      swr: d.swr ?? 4,
+      realGrowth: d.realGrowth ?? 3,
     }));
   };
 
@@ -768,18 +790,11 @@ const projectionBuckets = useMemo(() => {
   const clampedRetirementAge = Math.max(currentAge, targetRetirementAge);
   const clampedProjectionYears = Math.max(0, projectionYears);
 
-  const isBucketAccessible = (type: string, age: number, startWithdrawalAge?: number) => {
-    if (type === 'lisa') return age >= 60;
-    if (type === 'pension' || type === 'workplace-private-pension') return age >= pensionAccessAge;
-    if (['nhs-pension', 'civil-service-pension', 'teachers-pension', 'police-pension', 'firefighters-pension', 'armed-forces-pension', 'lgps-pension'].includes(type)) return age >= (startWithdrawalAge || 67);
-    return true;
-  };
-
   const accessibleProjectedTotal = useMemo(() => {
     return projectedSavings.reduce((sum, bucket) => {
       if (bucket.isHidden) return sum;
       // We check accessibility at the END of the projection (retirementAge)
-      if (isBucketAccessible(bucket.type, retirementAge)) {
+      if (isBucketAccessible(bucket, retirementAge)) {
         return sum + bucket.projected;
       }
       return sum;
@@ -827,7 +842,7 @@ const projectionBuckets = useMemo(() => {
 
       if (['nhs-pension', 'civil-service-pension', 'teachers-pension', 'police-pension', 'firefighters-pension', 'armed-forces-pension', 'lgps-pension'].includes(bucket.type)) {
         const effectiveWithdrawAge = settings.useWithdrawAge ? settings.withdrawAge : (bucket.startWithdrawalAge || 67);
-        if (isBucketAccessible(bucket.type, retirementAge, effectiveWithdrawAge)) {
+        if (isBucketAccessible({ type: bucket.type, startWithdrawalAge: effectiveWithdrawAge }, retirementAge)) {
           let salary = bucket.dbSalary || 0;
           let baseYears = (bucket.dbYearsService || 0);
           const effectiveStopAge = settings.useStopAge ? settings.stopAge : (bucket.stopContributingAge || 0);
@@ -878,7 +893,7 @@ const projectionBuckets = useMemo(() => {
         }
 
         // 2. Calculate income if accessible
-        if (val > 0 && isBucketAccessible(bucket.type, retirementAge, bucket.startWithdrawalAge)) {
+        if (val > 0 && isBucketAccessible(bucket, retirementAge)) {
           // Calculate annual drawdown for this specific pot
           annualIncome = val * (settings.rate / 100);
           
@@ -961,6 +976,24 @@ const projectionBuckets = useMemo(() => {
     };
   }, [projectedSavings, retirementAge, otherRetirementIncome, expectedOutgoings, drawdownSettings, pensionAccessAge, nhsJobsGross, civilServiceJobsGross, teachersJobsGross, projectionYears, taxSettings, isBucketAccessible, budget.monthlyExpenses, inflationRate, budgetLines, annualBills, additionalRetirementExpenses, showLisaUnder60]);
 
+  const currentAccessibleWealth = savings.filter(s => isBucketAccessible(s, currentAge)).reduce((sum, s) => sum + s.balance, 0);
+  const currentLockedWealth = savings.filter(s => !isBucketAccessible(s, currentAge)).reduce((sum, s) => sum + s.balance, 0);
+  
+  const annualAccessibleContribution = savings.filter(s => isBucketAccessible(s, currentAge)).reduce((sum, s) => sum + s.monthly, 0) * 12;
+  const annualLockedContribution = savings.filter(s => !isBucketAccessible(s, currentAge)).reduce((sum, s) => sum + s.monthly, 0) * 12;
+
+  const coastFireResult = useMemo(() => calculateCoastFire(
+    currentAge,
+    retirementAge,
+    pensionAccessAge,
+    currentAccessibleWealth,
+    currentLockedWealth,
+    retirementSummary.currentMonthlyExpenses * 12,
+    realGrowth,
+    swr,
+    annualAccessibleContribution,
+    annualLockedContribution
+  ), [currentAge, retirementAge, pensionAccessAge, currentAccessibleWealth, currentLockedWealth, retirementSummary.currentMonthlyExpenses, annualAccessibleContribution, annualLockedContribution, realGrowth, swr]);
 
   
   const sections = [
@@ -975,15 +1008,22 @@ const projectionBuckets = useMemo(() => {
       detail: money.format(accessibleProjectedTotal),
       color: "linear-gradient(135deg, #fffcf3 0%, #95cb99 100%)"
     },
-    { 
-      id: "mortgage", 
+    ...(showMortgageCard ? [{ 
+      id: "mortgage" as SectionId, 
       title: "Mortgage", 
       value: money.format(mortgage.amount), 
       subValue: `${mortgageSummary.payoffYears.toFixed(1)} yrs payoff`,
       detail: "current balance",
       color: "linear-gradient(135deg, #fff5f5 0%, #f7d9d9 100%)" 
-    },
-    { id: "retirement", title: "Retirement", value: monthlyMoney.format(retirementSummary.monthlyIn), detail: `${projectionYears.toFixed(2)} year projection`, color: "linear-gradient(135deg, #f3e8ff 0%, #e8dded 100%)"},
+    }] : []),
+    { id: "retirement" as SectionId, title: "Retirement", value: monthlyMoney.format(retirementSummary.monthlyIn), detail: `${projectionYears.toFixed(2)} year projection`, color: "linear-gradient(135deg, #f3e8ff 0%, #e8dded 100%)"},
+    ...(showCoastFireCard ? [{ 
+      id: "coastfire" as SectionId, 
+      title: "Coast FIRE", 
+      value: coastFireResult.isCoastFire ? "REACHED" : (coastFireResult.coastFireAge === -1 ? "NOT REACHED" : `Age ${Math.floor(coastFireResult.coastFireAge)}`), 
+      detail: coastFireResult.isCoastFire ? "contributions optional" : "estimated coast age",
+      color: "linear-gradient(135deg, #fffcf3 0%, #fdf9e2 100%)"
+    }] : []),
   ] satisfies { id: SectionId; title: string; value: string; detail: string; color: string; subValue?: string; subLabel?: string }[];
 
   if (authLoading) return <div className="loading-screen">Loading application...</div>;
@@ -1088,6 +1128,10 @@ const projectionBuckets = useMemo(() => {
           birthMonth={birthMonth} setBirthMonth={setBirthMonth}
           tax={tax}
           onLoadDemo={loadDemoScenario}
+          showMortgageCard={showMortgageCard}
+          setShowMortgageCard={setShowMortgageCard}
+          showCoastFireCard={showCoastFireCard}
+          setShowCoastFireCard={setShowCoastFireCard}
         />
       ) : null}
 
@@ -1162,6 +1206,21 @@ const projectionBuckets = useMemo(() => {
         <MortgageSection mortgage={mortgage} setMortgage={setMortgage} mortgageSummary={mortgageSummary} />
       ) : null}
 
+      {activeSection === "coastfire" ? (
+        <CoastFireSection 
+          currentAge={currentAge} 
+          retirementAge={retirementAge}
+          pensionAccessAge={pensionAccessAge}
+          currentAccessibleBalance={currentAccessibleWealth}
+          currentLockedBalance={currentLockedWealth}
+          retirementExpenses={retirementSummary.currentMonthlyExpenses * 12}
+          currentExpenses={budget.monthlyExpenses * 12}
+          annualAccessibleContribution={annualAccessibleContribution}
+          annualLockedContribution={annualLockedContribution}
+          taxSettings={taxSettings}
+        />
+      ) : null}
+
       {activeSection === "retirement" ? (
         <RetirementSection
           retirementAge={retirementAge}
@@ -1173,7 +1232,7 @@ const projectionBuckets = useMemo(() => {
           projectedSavings={projectedSavings}
           drawdownSettings={drawdownSettings}
           setDrawdownSettings={setDrawdownSettings}
-          isBucketAccessible={isBucketAccessible}
+          isBucketAccessible={(type: string, age: number, startWithdrawalAge?: number) => isBucketAccessible({ type, startWithdrawalAge }, age)}
           nhsJobsGross={nhsJobsGross}
           civilServiceJobsGross={civilServiceJobsGross}
           teachersJobsGross={teachersJobsGross}
@@ -1211,6 +1270,153 @@ const projectionBuckets = useMemo(() => {
           />      ) : null}
 
     </main>
+  );
+}
+
+function CoastFireSection({ 
+  currentAge, 
+  retirementAge, 
+  pensionAccessAge, 
+  currentAccessibleBalance, 
+  currentLockedBalance, 
+  retirementExpenses, 
+  currentExpenses, 
+  annualAccessibleContribution, 
+  annualLockedContribution,
+  taxSettings
+}: any) {
+  const [swr, setSwr] = useState(4);
+  const [realGrowth, setRealGrowth] = useState(3);
+  const [targetType, setTargetType] = useState<"current" | "retirement">("current");
+
+  const annualExpenses = targetType === "current" ? currentExpenses : retirementExpenses;
+  const annualContribution = annualAccessibleContribution + annualLockedContribution;
+
+  const updatedResult = useMemo(() => calculateCoastFire(
+    currentAge,
+    retirementAge,
+    pensionAccessAge,
+    currentAccessibleBalance,
+    currentLockedBalance,
+    annualExpenses,
+    realGrowth,
+    swr,
+    annualAccessibleContribution,
+    annualLockedContribution
+  ), [currentAge, retirementAge, pensionAccessAge, currentAccessibleBalance, currentLockedBalance, annualExpenses, realGrowth, swr, annualAccessibleContribution, annualLockedContribution]);
+
+  const grossSalaryRequired = useMemo(() => requiredGrossForNet(
+    annualExpenses / 12,
+    taxSettings.taxCode,
+    taxSettings.region,
+    taxSettings.includeStudentLoan,
+    taxSettings.pensionRate
+  ), [annualExpenses, taxSettings]);
+
+  return (
+    <div className="workspace">
+      <section className="panel span-12">
+        <div className="split-title">
+          <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
+            <h2 style={{ margin: 0 }}>Coast FIRE Explorer</h2>
+            <div className="button-group" style={{ background: '#f1f5f9', padding: '4px', borderRadius: '8px' }}>
+              <button 
+                className={targetType === 'current' ? 'active' : 'secondary'} 
+                style={{ fontSize: '0.7rem', minHeight: '30px', padding: '0 10px' }}
+                onClick={() => setTargetType('current')}
+              >
+                Current Lifestyle
+              </button>
+              <button 
+                className={targetType === 'retirement' ? 'active' : 'secondary'} 
+                style={{ fontSize: '0.7rem', minHeight: '30px', padding: '0 10px' }}
+                onClick={() => setTargetType('retirement')}
+              >
+                Retirement Budget
+              </button>
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: "20px" }}>
+            <label style={{ fontSize: '0.8rem' }}>
+              Real Growth %
+              <NumberInput value={realGrowth} onChange={setRealGrowth} suffix="%" />
+            </label>
+            <label style={{ fontSize: '0.8rem' }}>
+              SWR %
+              <NumberInput value={swr} onChange={setSwr} suffix="%" />
+            </label>
+          </div>
+        </div>
+
+        <div style={{ 
+          background: updatedResult.isCoastFire ? 'linear-gradient(135deg, #f0fff4 0%, #dcfce7 100%)' : 'linear-gradient(135deg, #fffcf3 0%, #fef9c3 100%)',
+          padding: '30px',
+          borderRadius: '12px',
+          textAlign: 'center',
+          marginBottom: '20px',
+          border: updatedResult.isCoastFire ? '1px solid #86efac' : '1px solid #fde047'
+        }}>
+          <span style={{ fontSize: '0.9rem', color: '#666', textTransform: 'uppercase', letterSpacing: '1px' }}>
+            {updatedResult.isCoastFire ? "Coast Status: Reached" : (updatedResult.coastFireAge === -1 ? "Coast Status: Not Achievable" : "Estimated Coast FIRE Age")}
+          </span>
+          <h1 style={{ fontSize: '3rem', margin: '10px 0', color: updatedResult.isCoastFire ? '#166534' : '#854d0e' }}>
+            {updatedResult.isCoastFire ? "REACHED!" : (updatedResult.coastFireAge === -1 ? "NOT REACHED" : `Age ${Math.floor(updatedResult.coastFireAge)}`)}
+          </h1>
+          <p style={{ fontSize: '1.1rem', maxWidth: '600px', margin: '0 auto', color: '#4b5563' }}>
+            {updatedResult.isCoastFire 
+              ? "Your current pots are already large enough (and accessible enough) to fund your retirement through growth alone. You could stop contributing today!"
+              : (updatedResult.coastFireAge === -1 
+                ? `Even if you keep contributing ${money.format(annualContribution)}/yr, you won't reach Coast FIRE by your chosen retirement age of ${retirementAge.toFixed(0)}.`
+                : `If you keep contributing ${money.format(annualContribution)}/yr, you will reach Coast FIRE at age ${Math.floor(updatedResult.coastFireAge)}. From that point, your pots will grow and bridge yourself comfortably at ${retirementAge.toFixed(0)}.`)}
+          </p>
+        </div>
+
+        {retirementAge < pensionAccessAge && (
+          <div style={{ 
+            background: updatedResult.isBridgeFunded ? '#f0f9ff' : '#fff1f2', 
+            padding: '15px 20px', 
+            borderRadius: '8px', 
+            marginBottom: '20px',
+            border: `1px solid ${updatedResult.isBridgeFunded ? '#bae6fd' : '#fecdd3'}`,
+            display: 'flex',
+            alignItems: 'center',
+            gap: '15px'
+          }}>
+            <span style={{ fontSize: '1.5rem' }}>{updatedResult.isBridgeFunded ? '✅' : '⚠️'}</span>
+            <div style={{ flex: 1 }}>
+              <strong style={{ display: 'block', color: updatedResult.isBridgeFunded ? '#0369a1' : '#9f1239' }}>
+                Bridge Requirement: {money.format(updatedResult.bridgeRequired)}
+              </strong>
+              <small style={{ color: '#64748b' }}>
+                You want to retire at age {retirementAge.toFixed(0)}, but your pensions are locked until age {pensionAccessAge}. 
+                {updatedResult.isBridgeFunded 
+                  ? " Your ISA/Cash pots are projected to be large enough to cover this gap."
+                  : " Your ISA/Cash pots are currently too small to bridge this gap. You'll need more accessible savings."}
+              </small>
+            </div>
+          </div>
+        )}
+
+        <div className="summary-grid">
+          <Metric label="Target Pot (Retirement)" value={money.format(updatedResult.targetPotAtRetirement)} detail={`to cover ${money.format(annualExpenses)}/yr`} />
+          <Metric label="Milestone: Pot at Coast Age" value={money.format(updatedResult.coastFirePotAtAge)} detail={`projected balance at age ${updatedResult.coastFireAge === -1 ? 'N/A' : Math.floor(updatedResult.coastFireAge)}`} />
+          <Metric label="Coasting Gross Salary" value={money.format(grossSalaryRequired)} detail="Gross needed to cover net lifestyle" />
+        </div>
+
+        <div style={{ marginTop: '30px', padding: '20px', background: '#f8fafc', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+          <h3 style={{ marginTop: 0 }}>Smart Bridge Awareness</h3>
+          <p style={{ fontSize: '0.9rem', color: '#64748b', lineHeight: '1.6' }}>
+            This calculator is <strong>Access-Aware</strong>. Because you want to retire at {retirementAge.toFixed(0)}, which is before your pension access age ({pensionAccessAge}), it calculates two things:
+            <br/><br/>
+            1. <strong>The Bridge:</strong> Do you have enough in accessible accounts (ISAs/Cash) to pay your bills until your pension unlocks?
+            <br/>
+            2. <strong>The Long Term:</strong> Do you have enough total wealth to sustain a {swr}% withdrawal rate for the rest of your life?
+            <br/><br/>
+            <strong>Your Coasting Income:</strong> Once you reach Coast FIRE (Age {updatedResult.coastFireAge === -1 ? "N/A" : Math.floor(updatedResult.coastFireAge)}), you technically don't need to save for retirement anymore. This means you only need to earn enough to cover your current annual expenses of {money.format(annualExpenses)}/year.
+          </p>
+        </div>
+      </section>
+    </div>
   );
 }
 
@@ -2661,7 +2867,15 @@ function TaxSection({ tax, sippNetContribution }: any) {
     </div>
   );
 }
-function SettingsSection({ taxSettings, setTaxSettings, birthYear, setBirthYear, birthMonth, setBirthMonth, tax, onLoadDemo }: any) {
+function SettingsSection({ 
+  taxSettings, setTaxSettings, 
+  birthYear, setBirthYear, 
+  birthMonth, setBirthMonth, 
+  tax, 
+  onLoadDemo,
+  showMortgageCard, setShowMortgageCard,
+  showCoastFireCard, setShowCoastFireCard
+}: any) {
   return (
     <div className="workspace">
       <section className="panel span-6">
@@ -2705,6 +2919,17 @@ function SettingsSection({ taxSettings, setTaxSettings, birthYear, setBirthYear,
               onChange={(e) => setTaxSettings({ ...taxSettings, includeStudentLoan: e.target.checked })}
             />
             Include Student Loan (Plan 2)
+          </label>
+        </div>
+        <div style={{ marginTop: '20px', borderTop: '1px solid #eee', paddingTop: '20px' }}>
+          <h3>Dashboard Layout</h3>
+          <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', marginTop: '8px' }}>
+            <input type="checkbox" checked={showMortgageCard} onChange={(e) => setShowMortgageCard(e.target.checked)} />
+            Show Mortgage Card
+          </label>
+          <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', marginTop: '8px' }}>
+            <input type="checkbox" checked={showCoastFireCard} onChange={(e) => setShowCoastFireCard(e.target.checked)} />
+            Show Coast FIRE Card
           </label>
         </div>
         <div className="callout neutral">

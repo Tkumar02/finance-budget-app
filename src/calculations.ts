@@ -104,7 +104,7 @@ export function calculateCurrentBucketValue(bucket: SavingsBucket): {
   };
 }
 
-export function isBucketAccessible(bucket: SavingsBucket, currentAge: number): boolean {
+export function isBucketAccessible(bucket: { type: string; startWithdrawalAge?: number }, currentAge: number): boolean {
   const type = bucket.type.toLowerCase();
   
   if (type === 'lisa') {
@@ -683,6 +683,98 @@ export function calculateMortgageUpdate(mortgage: MortgageInputs, today: Date = 
   }
   
   return { newBalance: balance, interestAccrued, paymentsMade, monthsElapsed };
+}
+
+export type CoastFireResult = {
+  coastFireAge: number;
+  isCoastFire: boolean;
+  targetPotAtRetirement: number;
+  requiredCurrentBalance: number;
+  currentCoastGap: number;
+  projectedPotAtRetirement: number;
+  yearsToCoast: number;
+  bridgeRequired: number;
+  isBridgeFunded: boolean;
+  coastFirePotAtAge: number;
+};
+
+export function calculateCoastFire(
+  currentAge: number,
+  retirementAge: number,
+  pensionAccessAge: number,
+  currentAccessibleBalance: number,
+  currentLockedBalance: number,
+  annualExpenses: number,
+  realGrowthRate: number,
+  swr: number = 4,
+  annualAccessibleContribution: number = 0,
+  annualLockedContribution: number = 0
+): CoastFireResult {
+  const targetPot = annualExpenses / (swr / 100);
+  const growthFactor = 1 + (realGrowthRate / 100);
+  const bridgeYears = Math.max(0, pensionAccessAge - retirementAge);
+  const bridgeCostAtRetirement = annualExpenses * bridgeYears;
+  
+  function checkStatus(acc: number, lock: number, age: number) {
+    const yearsToRetire = Math.max(0, retirementAge - age);
+    
+    // Project current pots to retirementAge
+    const accAtRetire = acc * Math.pow(growthFactor, yearsToRetire);
+    const lockAtRetire = lock * Math.pow(growthFactor, yearsToRetire);
+    
+    // Condition 1: Can we fund the bridge?
+    const canFundBridge = accAtRetire >= bridgeCostAtRetirement;
+    
+    // Condition 2: Is the remaining total enough for the long term?
+    const remainingAfterBridge = (accAtRetire - bridgeCostAtRetirement) + lockAtRetire;
+    const projectedAtAccess = remainingAfterBridge * Math.pow(growthFactor, bridgeYears);
+    
+    const isFunded = canFundBridge && projectedAtAccess >= targetPot;
+    
+    return { isFunded, canFundBridge };
+  }
+
+  const statusToday = checkStatus(currentAccessibleBalance, currentLockedBalance, currentAge);
+  
+  let coastFireAge = -1;
+  let coastFirePotAtAge = 0;
+  
+  if (statusToday.isFunded) {
+    coastFireAge = currentAge;
+    coastFirePotAtAge = currentAccessibleBalance + currentLockedBalance;
+  } else {
+    // Simulate year by year to find the earliest Coast Age
+    let tempAcc = currentAccessibleBalance;
+    let tempLock = currentLockedBalance;
+    
+    for (let age = Math.floor(currentAge); age < retirementAge; age++) {
+      // End of year contribution and growth
+      tempAcc = (tempAcc * growthFactor) + annualAccessibleContribution;
+      tempLock = (tempLock * growthFactor) + annualLockedContribution;
+
+      const status = checkStatus(tempAcc, tempLock, age + 1);
+      if (status.isFunded) {
+        coastFireAge = age + 1;
+        coastFirePotAtAge = tempAcc + tempLock;
+        break;
+      }
+    }
+  }
+
+  const yearsToRetirement = Math.max(0, retirementAge - currentAge);
+
+  return {
+    coastFireAge: coastFireAge, // -1 means not achieved
+    isCoastFire: statusToday.isFunded,
+    targetPotAtRetirement: targetPot,
+    requiredCurrentBalance: targetPot / Math.pow(growthFactor, yearsToRetirement + bridgeYears),
+    currentCoastGap: Math.max(0, (targetPot / Math.pow(growthFactor, yearsToRetirement + bridgeYears)) - (currentAccessibleBalance + currentLockedBalance)),
+    projectedPotAtRetirement: (currentAccessibleBalance + currentLockedBalance) * Math.pow(growthFactor, yearsToRetirement),
+    yearsToCoast: coastFireAge === -1 ? -1 : Math.max(0, Math.floor(coastFireAge - currentAge)),
+    bridgeRequired: bridgeCostAtRetirement,
+    isBridgeFunded: statusToday.canFundBridge,
+    coastFirePotAtAge: coastFirePotAtAge
+  };
 }
 
 export type FinancialSnapshot = {
