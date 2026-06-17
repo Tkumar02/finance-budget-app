@@ -58,6 +58,7 @@ export type MortgageInputs = {
   monthlyOverpayment: number;
   oneOffMonth: number;
   oneOffAmount: number;
+  lastUpdated?: string;
 };
 
 export type TaxSettings = {
@@ -375,12 +376,20 @@ export function calculateTaxSummary(incomes: PayeIncome[], streams: SelfEmployme
   const selfNi = calculateNationalInsurance(niLiableSelfProfit, "class4");
   const totalNi = payeNi + selfNi;
 
+  // Student Loan
+  let studentLoanTotal = 0;
+  if (settings.includeStudentLoan) {
+    const threshold = 27295; // Plan 2 threshold for 2024/25
+    const totalIncomeForStudentLoan = payeGross + selfProfit;
+    studentLoanTotal = Math.max(0, (totalIncomeForStudentLoan - threshold) * 0.09);
+  }
+
   const employmentPensionTotal = employmentPension(incomes);
   const employerPensionTotal = employerPensionContributions(incomes);
   
   const selfTaxTotal = selfAssessmentDue + selfNi;
-  const netAnnual = payeGross - employmentPensionTotal - assumedPayeTaxPaid - payeNi + selfProfit - selfTaxTotal + annualSavingsInterest - combinedTax.interestTax;
-  const cashAnnual = payeGross - employmentPensionTotal - assumedPayeTaxPaid - payeNi + selfProfit;
+  const netAnnual = payeGross - employmentPensionTotal - assumedPayeTaxPaid - payeNi + selfProfit - selfTaxTotal + annualSavingsInterest - combinedTax.interestTax - studentLoanTotal;
+  const cashAnnual = payeGross - employmentPensionTotal - assumedPayeTaxPaid - payeNi + selfProfit - studentLoanTotal;
   
   // SIPP Optimization Logic
   const adjustedNet = combinedTax.adjustedNetIncome;
@@ -408,6 +417,7 @@ export function calculateTaxSummary(incomes: PayeIncome[], streams: SelfEmployme
     selfNi,
     selfTaxTotal,
     totalNi,
+    studentLoanTotal,
     sippGrossNeededToReach100k,
     sippNetNeededToReach100k,
     sippGrossToStayBasic,
@@ -638,6 +648,43 @@ function calculateInterestWithoutOverpayments(amount: number, annualRate: number
   return interestTotal;
 }
 
+export function calculateMortgageUpdate(mortgage: MortgageInputs, today: Date = new Date()) {
+  if (!mortgage.lastUpdated) return { newBalance: mortgage.amount, interestAccrued: 0, paymentsMade: 0, monthsElapsed: 0 };
+  
+  const lastUpdate = new Date(mortgage.lastUpdated);
+  
+  // Calculate months between dates
+  const yearDiff = today.getFullYear() - lastUpdate.getFullYear();
+  const monthDiff = today.getMonth() - lastUpdate.getMonth();
+  let monthsElapsed = yearDiff * 12 + monthDiff;
+  
+  // Adjust if today's day is before last update's day
+  if (today.getDate() < lastUpdate.getDate()) {
+    monthsElapsed--;
+  }
+  
+  if (monthsElapsed <= 0) return { newBalance: mortgage.amount, interestAccrued: 0, paymentsMade: 0, monthsElapsed: 0 };
+  
+  const standardPayment = monthlyMortgagePayment(mortgage.amount, mortgage.annualRate, mortgage.years);
+  const monthlyRate = clampNumber(mortgage.annualRate) / 100 / 12;
+  let balance = mortgage.amount;
+  let interestAccrued = 0;
+  let paymentsMade = 0;
+  
+  for (let i = 0; i < monthsElapsed; i++) {
+    const monthIndex = i + 1; // 1-based index for comparison with oneOffMonth
+    const interest = balance * monthlyRate;
+    const extra = (monthIndex === Math.round(mortgage.oneOffMonth)) ? clampNumber(mortgage.oneOffAmount) : 0;
+    const payment = Math.min(balance + interest, standardPayment + clampNumber(mortgage.monthlyOverpayment) + extra);
+    interestAccrued += interest;
+    paymentsMade += payment;
+    balance = Math.max(0, balance + interest - payment);
+    if (balance === 0) break;
+  }
+  
+  return { newBalance: balance, interestAccrued, paymentsMade, monthsElapsed };
+}
+
 export type FinancialSnapshot = {
   profile: { currentAge: number; retirementAge: number; pensionAccessAge: number };
   financialHealth: {
@@ -776,6 +823,59 @@ export function calculateRetirementGrossRequired(
     totalGrossAnnual: grossPension + netFromNonTaxable,
     totalAnnualTaxOnPots
   };
+}
+
+export function calculateGrowthSinceLastUpdate(bucket: SavingsBucket, today: Date = new Date()) {
+  if (!bucket.lastUpdated) return { growth: 0, days: 0 };
+  const lastUpdate = new Date(bucket.lastUpdated);
+  const diffTime = today.getTime() - lastUpdate.getTime();
+  const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
+  if (diffDays <= 0) return { growth: 0, days: 0 };
+
+  const annualRate = clampNumber(bucket.annualRate) / 100;
+  const dailyRate = annualRate / 365;
+  
+  // Standard compound interest formula: A = P(1 + r)^t
+  const newBalance = bucket.balance * Math.pow(1 + dailyRate, diffDays);
+  const growth = newBalance - bucket.balance;
+  
+  return { growth, days: diffDays };
+}
+
+export function getPendingMonthlyContributions(bucket: SavingsBucket, today: Date = new Date()) {
+  if (!bucket.lastUpdated || bucket.monthly <= 0) return 0;
+  const lastUpdate = new Date(bucket.lastUpdated);
+  
+  // Calculate months between dates
+  const yearDiff = today.getFullYear() - lastUpdate.getFullYear();
+  const monthDiff = today.getMonth() - lastUpdate.getMonth();
+  let totalMonths = yearDiff * 12 + monthDiff;
+  
+  // Adjust if today's day is before last update's day
+  if (today.getDate() < lastUpdate.getDate()) {
+    totalMonths--;
+  }
+  
+  return Math.max(0, totalMonths);
+}
+
+export function generateSavingsCSV(savings: SavingsBucket[]) {
+  const headers = ["Account Name", "Type", "Total Capital", "Total Growth", "Current Balance", "Monthly Contribution", "Annual Growth Rate", "Last Updated"];
+  const rows = savings.map(s => {
+    const { currentValue, contributed, other } = calculateCurrentBucketValue(s);
+    return [
+      s.label,
+      s.type,
+      contributed.toFixed(2),
+      other.toFixed(2),
+      currentValue.toFixed(2),
+      s.monthly.toFixed(2),
+      s.annualRate.toFixed(2) + "%",
+      s.lastUpdated || "N/A"
+    ];
+  });
+  
+  return [headers, ...rows].map(row => row.map(cell => `"${cell}"`).join(",")).join("\n");
 }
 
 export function requiredGrossForNet(targetNet: number, taxCode: string, region: Region, includeStudentLoan = false, pensionRate = 0) {

@@ -36,6 +36,7 @@ import {
   calculateIncomeTax,
   calculateNationalInsurance,
   calculateMortgage,
+  calculateMortgageUpdate,
   calculateTaxSummary,
   clampNumber,
   money,
@@ -54,6 +55,9 @@ import {
   getFinancialSnapshot,
   isBucketAccessible,
   FinancialSnapshot,
+  calculateGrowthSinceLastUpdate,
+  getPendingMonthlyContributions,
+  generateSavingsCSV,
 } from "./calculations";
 import "./styles.css";
 
@@ -255,6 +259,85 @@ function App() {
   const [showLisaUnder60, setShowLisaUnder60] = useState(true);
   const [includeStatePension, setIncludeStatePension] = useState(true);
 
+  const [pendingContributions, setPendingContributions] = useState<{bucketId: string, count: number, totalAmount: number}[]>([]);
+  const [pendingMortgageUpdate, setPendingMortgageUpdate] = useState<{months: number, newBalance: number, payments: number} | null>(null);
+  const hasCheckedGrowth = React.useRef(false);
+
+  const confirmContributions = () => {
+    const today = new Date().toISOString().split('T')[0];
+    const newSavings = savings.map(s => {
+      const p = pendingContributions.find(pc => pc.bucketId === s.id);
+      if (p) {
+        return {
+          ...s,
+          balance: s.balance + p.totalAmount,
+          totalContributed: (s.totalContributed || s.balance) + p.totalAmount,
+          lastUpdated: today
+        };
+      }
+      return s;
+    });
+    setSavings(newSavings);
+
+    if (pendingMortgageUpdate) {
+      setMortgage({
+        ...mortgage,
+        amount: pendingMortgageUpdate.newBalance,
+        years: Math.max(0, mortgage.years - (pendingMortgageUpdate.months / 12)),
+        oneOffMonth: Math.max(0, mortgage.oneOffMonth - pendingMortgageUpdate.months),
+        lastUpdated: today
+      });
+      setPendingMortgageUpdate(null);
+    }
+
+    setPendingContributions([]);
+  };
+
+  useEffect(() => {
+    if (!authLoading && user && !hasCheckedGrowth.current && savings.length > 0) {
+      const today = new Date();
+      let updated = false;
+      const newSavings = savings.map(s => {
+        const { growth, days } = calculateGrowthSinceLastUpdate(s, today);
+        if (days > 0) {
+          updated = true;
+          return {
+            ...s,
+            balance: s.balance + growth,
+            lastUpdated: today.toISOString().split('T')[0]
+          };
+        }
+        return s;
+      });
+
+      if (updated) {
+        setSavings(newSavings);
+      }
+      
+      const pending = savings.map(s => {
+        const count = getPendingMonthlyContributions(s, today);
+        if (count > 0) {
+          return { bucketId: s.id, count, totalAmount: s.monthly * count };
+        }
+        return null;
+      }).filter(Boolean) as {bucketId: string, count: number, totalAmount: number}[];
+
+      setPendingContributions(pending);
+
+      // Check for mortgage updates
+      const mortgageUpdate = calculateMortgageUpdate(mortgage, today);
+      if (mortgageUpdate.monthsElapsed > 0) {
+        setPendingMortgageUpdate({
+          months: mortgageUpdate.monthsElapsed,
+          newBalance: mortgageUpdate.newBalance,
+          payments: mortgageUpdate.paymentsMade
+        });
+      }
+
+      hasCheckedGrowth.current = true;
+    }
+  }, [authLoading, user, savings, mortgage]);
+
   const STATE_PENSION_AGE = 67;
   const ANNUAL_STATE_PENSION = 11502.40; // 2024/25
 
@@ -431,6 +514,7 @@ function App() {
   const loadPlan = (plan: Plan) => {
     if (!confirmUnsavedChanges()) return;
     setCurrentPlanId(plan.id);
+    hasCheckedGrowth.current = false;
     const d = plan.data;
     setPaye(d.paye);
     setSelfEmployment(d.selfEmployment);
@@ -527,6 +611,7 @@ function App() {
   const createNewPlan = () => {
     if (!confirmUnsavedChanges()) return;
     setCurrentPlanId(null);
+    hasCheckedGrowth.current = false;
     setPaye(initialPaye);
     setSelfEmployment(initialSelfEmployment);
     setTaxSettings({
@@ -832,8 +917,19 @@ const projectionBuckets = useMemo(() => {
     const totalAnnualNet = totalAnnualGross - taxResult.totalTax;
     
     // Detailed Retirement Cost Calculation
+    const mortgagePaidOffByRetirement = mortgageSummary.payoffYears <= projectionYears;
+
     const retiredBudgetLinesTotal = budgetLines
-        .filter(l => l.includeInRetirement ?? true)
+        .filter(l => {
+          const include = l.includeInRetirement ?? true;
+          if (!include) return false;
+          
+          // Auto-exclude mortgage from retirement if it will be paid off
+          if (mortgagePaidOffByRetirement && l.label.toLowerCase().includes('mortgage')) {
+            return false;
+          }
+          return true;
+        })
         .reduce((sum, l) => sum + (l.amount || 0), 0);
     
     const retiredAnnualBillsTotal = annualBills
@@ -879,7 +975,14 @@ const projectionBuckets = useMemo(() => {
       detail: money.format(accessibleProjectedTotal),
       color: "linear-gradient(135deg, #fffcf3 0%, #95cb99 100%)"
     },
-    { id: "mortgage", title: "Mortgage", value: `${mortgageSummary.payoffYears.toFixed(1)} yrs`, detail: "payoff estimate", color: "linear-gradient(135deg, #fff5f5 0%, #f7d9d9 100%)" },
+    { 
+      id: "mortgage", 
+      title: "Mortgage", 
+      value: money.format(mortgage.amount), 
+      subValue: `${mortgageSummary.payoffYears.toFixed(1)} yrs payoff`,
+      detail: "current balance",
+      color: "linear-gradient(135deg, #fff5f5 0%, #f7d9d9 100%)" 
+    },
     { id: "retirement", title: "Retirement", value: monthlyMoney.format(retirementSummary.monthlyIn), detail: `${projectionYears.toFixed(2)} year projection`, color: "linear-gradient(135deg, #f3e8ff 0%, #e8dded 100%)"},
   ] satisfies { id: SectionId; title: string; value: string; detail: string; color: string; subValue?: string; subLabel?: string }[];
 
@@ -934,6 +1037,19 @@ const projectionBuckets = useMemo(() => {
           </div>
         </div>
       </section>
+
+      {(pendingContributions.length > 0 || pendingMortgageUpdate) && (
+        <div className="catchup-banner" style={{ background: '#fff9db', border: '1px solid #fcc419', padding: '12px', margin: '16px 20px', borderRadius: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div style={{ fontSize: '0.9rem', color: '#856404' }}>
+            <strong>Wealth Tracker:</strong> 
+            {pendingContributions.length > 0 && ` You have ${pendingContributions.reduce((sum, p) => sum + p.count, 0)} pending monthly contributions to confirm.`}
+            {pendingMortgageUpdate && ` Your mortgage has ${pendingMortgageUpdate.months} pending payments to apply.`}
+          </div>
+          <button onClick={confirmContributions} style={{ background: '#fcc419', color: '#856404', border: 'none', padding: '8px 16px', borderRadius: '4px', cursor: 'pointer', fontWeight: 600 }}>
+            Confirm & Apply Capital
+          </button>
+        </div>
+      )}
 
       <section className={`summary-grid ${activeSection !== "overview" ? "focus-mode" : ""}`}>
         <Metric label="Annual net estimate" value={money.format(tax.netAnnual)} tone="gold" />
@@ -1037,7 +1153,9 @@ const projectionBuckets = useMemo(() => {
             teachersJobsGross={teachersJobsGross}
             drawdownSettings={drawdownSettings}
             birthYear={birthYear}
-            />
+            mortgage={mortgage}
+            currentAge={currentAge}
+          />
             ) : null}
 
       {activeSection === "mortgage" ? (
@@ -1907,8 +2025,9 @@ function OverviewSection({
         <h2>Current Plan</h2>
         <ResultRows
           rows={[
-            ["Monthly income (cash)", tax.cashMonthlyNet],
+            ["Monthly income (gross cash)", tax.cashMonthlyNet + tax.studentLoanTotal / 12],
             ["Tax set-aside", -taxSetAside],
+            ...(tax.studentLoanTotal > 0 ? [["Student loan", -tax.studentLoanTotal / 12] as [string, number]] : []),
             ["Monthly expenses", -budget.monthlyExpenses],
             ["Monthly savings", -budget.monthlySavings],
             ["Monthly surplus", budget.monthlySurplus],
@@ -2488,6 +2607,7 @@ function TaxSection({ tax, sippNetContribution }: any) {
             ["Income tax", money.format(Number(tax.combinedTax?.totalTax || 0))],
             ["Tax on interest", money.format(Number(tax.interestTax || 0))],
             ["National Insurance", money.format(Number(tax.totalNi || 0))],
+            ["Student Loan", money.format(Number(tax.studentLoanTotal || 0))],
             ["PAYE tax credited", money.format(Number(tax.assumedPayeTaxPaid || 0))],
             ["SIPP contribution (Net)", money.format(Number(sippNetContribution || 0))],
             ["SIPP contribution (Gross)", money.format(Number(sippNetContribution || 0) * 1.25)],
@@ -2578,6 +2698,14 @@ function SettingsSection({ taxSettings, setTaxSettings, birthYear, setBirthYear,
               <option value="scotland">Scotland</option>
             </select>
           </label>
+          <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', marginTop: '8px' }}>
+            <input 
+              type="checkbox" 
+              checked={taxSettings.includeStudentLoan} 
+              onChange={(e) => setTaxSettings({ ...taxSettings, includeStudentLoan: e.target.checked })}
+            />
+            Include Student Loan (Plan 2)
+          </label>
         </div>
         <div className="callout neutral">
           <ResultRows
@@ -2585,6 +2713,7 @@ function SettingsSection({ taxSettings, setTaxSettings, birthYear, setBirthYear,
               ["Personal allowance", tax.combinedTax.allowance],
               ["Income tax", tax.combinedTax.totalTax],
               ["National Insurance", tax.totalNi],
+              ["Student Loan", tax.studentLoanTotal],
             ]}
           />
         </div>
@@ -2946,7 +3075,7 @@ function BudgetSection({
   );
 }
 
-function WealthSummaryCard({ savings, currentAge }: { savings: SavingsBucket[], currentAge: number }) {
+function WealthSummaryCard({ savings, mortgage, currentAge }: { savings: SavingsBucket[], mortgage: MortgageInputs, currentAge: number }) {
   const summary = useMemo(() => {
     return savings.reduce((acc, bucket) => {
       const { currentValue, contributed, other } = calculateCurrentBucketValue(bucket);
@@ -2975,6 +3104,8 @@ function WealthSummaryCard({ savings, currentAge }: { savings: SavingsBucket[], 
       accessibleBreakdown: { cash: 0, isa: 0, lisa: 0 }
     });
   }, [savings, currentAge]);
+
+  const netWealth = summary.totalValue - mortgage.amount;
 
   const total = summary.totalValue || 1;
   const contribPct = (summary.contributed / total) * 100;
@@ -3017,23 +3148,40 @@ function WealthSummaryCard({ savings, currentAge }: { savings: SavingsBucket[], 
   );
 
   return (
-    <section className="panel span-12" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '20px' }}>
+    <section className="panel span-12" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '20px' }}>
       <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
-        <h2>Wealth Summary</h2>
+        <h2>Net Wealth</h2>
+        <div style={{ display: "flex", alignItems: "center", gap: "20px" }}>
+          <div style={{ width: '60px', height: '60px', background: '#f0f7ff', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.5rem' }}>💰</div>
+          <div style={{ flex: 1 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", paddingBottom: "10px", marginBottom: "10px", borderBottom: "1px solid #eee" }}>
+              <span>Net Wealth</span>
+              <strong>{money.format(netWealth)}</strong>
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.85rem", color: "#24594f" }}>
+              <span>Total Assets</span>
+              <strong>{money.format(summary.totalValue)}</strong>
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.85rem", color: "#c0392b" }}>
+              <span>Mortgage Debt</span>
+              <strong>{money.format(mortgage.amount)}</strong>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
+        <h2>Asset Composition</h2>
         <div style={{ display: "flex", alignItems: "center", gap: "20px" }}>
           {compositionChart}
           <div style={{ flex: 1 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", paddingBottom: "10px", marginBottom: "10px", borderBottom: "1px solid #eee" }}>
-              <span>Total Value</span>
-              <strong>{money.format(summary.totalValue)}</strong>
-            </div>
             <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.85rem", color: "#24594f" }}>
-              <span>Contributed</span>
-              <span>{money.format(summary.contributed)}</span>
+              <span>Capital Contributed</span>
+              <strong>{money.format(summary.contributed)}</strong>
             </div>
             <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.85rem", color: "#e67e22" }}>
-              <span>Other (Growth/Bonus)</span>
-              <span>{money.format(summary.other)}</span>
+              <span>Market Growth</span>
+              <strong>{money.format(summary.other)}</strong>
             </div>
           </div>
         </div>
@@ -3055,29 +3203,6 @@ function WealthSummaryCard({ savings, currentAge }: { savings: SavingsBucket[], 
           </div>
         </div>
       </div>
-
-      <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
-        <h2>Accessible Breakdown</h2>
-        <div style={{ display: "flex", alignItems: "center", gap: "20px" }}>
-          {accessibleBreakdownChart}
-          <div style={{ flex: 1 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.85rem", color: "#3498db" }}>
-              <span>Cash</span>
-              <strong>{money.format(summary.accessibleBreakdown.cash)}</strong>
-            </div>
-            <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.85rem", color: "#9b59b6" }}>
-              <span>ISA</span>
-              <strong>{money.format(summary.accessibleBreakdown.isa)}</strong>
-            </div>
-            { (currentAge >= 60 || summary.accessibleBreakdown.lisa > 0) && (
-              <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.85rem", color: "#f1c40f" }}>
-                <span>LISA</span>
-                <strong>{money.format(summary.accessibleBreakdown.lisa)}</strong>
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
     </section>
   );
 }
@@ -3085,16 +3210,28 @@ function WealthSummaryCard({ savings, currentAge }: { savings: SavingsBucket[], 
 function SavingsSection({
   savings, setSavings, projectionYears, setProjectionYears, projectedSavings, projectedTotal, allProjectedTotal,
   employmentPensionMonthly, employerPensionMonthly, nhsJobsGross, civilServiceJobsGross, teachersJobsGross,
-  drawdownSettings, birthYear
+  drawdownSettings, birthYear, mortgage, currentAge
 }: any) {
   const refs = useMemo(() => savings.reduce((acc: any, b: any) => ({ ...acc, [b.id]: React.createRef<HTMLDivElement>() }), {}), [savings]);
+  
+  const handleExportCSV = () => {
+    const csv = generateSavingsCSV(savings);
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `finance_statement_${new Date().toISOString().split('T')[0]}.csv`;
+    a.click();
+  };
+
   return (
     <div className="workspace">
-      <WealthSummaryCard savings={savings} currentAge={2026 - birthYear} />
+      <WealthSummaryCard savings={savings} mortgage={mortgage} currentAge={currentAge} />
       <section className="panel span-12">
         <div className="split-title">
           <h2>Savings Manager</h2>
           <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+            <button className="secondary" onClick={handleExportCSV} style={{ fontSize: '0.75rem', height: '32px' }}>Download CSV Statement</button>
             <span style={{ fontSize: "0.9rem", color: "#666" }}>Projection Period:</span>
             <div style={{ width: "100px" }}>
               <NumberInput placeholder="10" value={parseFloat(projectionYears.toFixed(2))} onChange={setProjectionYears} suffix="yrs" />
@@ -3122,10 +3259,10 @@ function SavingsSection({
                       <option value="teachers-pension">Teachers' Pension</option>
                     </select>
                   </div>
-                  <div><label>Balance</label><NumberInput placeholder="0" value={bucket.balance} onChange={(balance: number) => setSavings(updateItem(savings, bucket.id, { balance } as Partial<SavingsBucket>))} /></div>
-                  <div><label>Total Contributed</label><NumberInput placeholder="0" value={bucket.totalContributed || 0} onChange={(totalContributed: number) => setSavings(updateItem(savings, bucket.id, { totalContributed } as Partial<SavingsBucket>))} /></div>
+                  <div><label>Balance</label><NumberInput placeholder="0" value={parseFloat(bucket.balance.toFixed(2))} onChange={(balance: number) => setSavings(updateItem(savings, bucket.id, { balance: parseFloat(balance.toFixed(2)) } as Partial<SavingsBucket>))} /></div>
+                  <div><label>Total Contributed</label><NumberInput placeholder="0" value={parseFloat((bucket.totalContributed || 0).toFixed(2))} onChange={(totalContributed: number) => setSavings(updateItem(savings, bucket.id, { totalContributed: parseFloat(totalContributed.toFixed(2)) } as Partial<SavingsBucket>))} /></div>
                   <div><label>Last Updated</label><input type="date" value={bucket.lastUpdated || ""} onChange={(e) => setSavings(updateItem(savings, bucket.id, { lastUpdated: e.target.value } as Partial<SavingsBucket>))} /></div>
-                  <div><label>Monthly</label><NumberInput placeholder="0" value={parseFloat(bucket.monthly.toFixed(2))} onChange={(monthly: number) => setSavings(updateItem(savings, bucket.id, { monthly } as Partial<SavingsBucket>))} /></div>
+                  <div><label>Monthly</label><NumberInput placeholder="0" value={parseFloat(bucket.monthly.toFixed(2))} onChange={(monthly: number) => setSavings(updateItem(savings, bucket.id, { monthly: parseFloat(monthly.toFixed(2)) } as Partial<SavingsBucket>))} /></div>
                   <div><label>Growth %</label><NumberInput placeholder="0" value={bucket.annualRate} onChange={(annualRate: number) => setSavings(updateItem(savings, bucket.id, { annualRate } as Partial<SavingsBucket>))} suffix="%" /></div>
                 </div>
                 <button className="delete-btn" onClick={() => setSavings(savings.filter((s: SavingsBucket) => s.id !== bucket.id))} style={{ marginTop: "16px", width: "100%" }}>Delete Bucket</button>
@@ -3226,6 +3363,7 @@ function MortgageSection({
         <label>Monthly overpayment <NumberInput placeholder="0" value={mortgage.monthlyOverpayment} onChange={(monthlyOverpayment) => setMortgage({ ...mortgage, monthlyOverpayment })} /></label>
         <label>One-off month <NumberInput placeholder="0" value={mortgage.oneOffMonth} onChange={(oneOffMonth) => setMortgage({ ...mortgage, oneOffMonth })} /></label>
         <label>One-off amount <NumberInput placeholder="0" value={mortgage.oneOffAmount} onChange={(oneOffAmount) => setMortgage({ ...mortgage, oneOffAmount })} /></label>
+        <label>Last updated <input type="date" value={mortgage.lastUpdated || ""} onChange={(e) => setMortgage({ ...mortgage, lastUpdated: e.target.value })} style={{ marginTop: '4px' }} /></label>
       </div>      <section className="summary-grid tight">
         <Metric label="Standard payment" value={monthlyMoney.format(mortgageSummary.standardPayment)} />
         <Metric label="Payoff time" value={`${mortgageSummary.payoffYears.toFixed(1)} years`} />
