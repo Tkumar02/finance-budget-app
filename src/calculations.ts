@@ -543,14 +543,17 @@ export function projectSavings(buckets: SavingsBucket[], years: number, birthYea
 
     // 3. Apply growth and update balances
     bucketStates.forEach((b, idx) => {
-      const settings = drawdownSettings[b.id] || {};
-      const effectiveWithdrawAge = settings.useWithdrawAge ? settings.withdrawAge : b.startWithdrawalAge;
+      const settings = drawdownSettings[b.id] || { rate: 0, withdrawAge: b.startWithdrawalAge || 67 };
+      const effectiveWithdrawAge = settings.withdrawAge || b.startWithdrawalAge || 67;
       const effectiveStopAge = settings.useStopAge ? settings.stopAge : b.stopContributingAge;
 
-      const isWithdrawing = effectiveWithdrawAge && ageAtMonth >= effectiveWithdrawAge;
+      const isWithdrawing = (settings.rate > 0) && effectiveWithdrawAge && ageAtMonth >= effectiveWithdrawAge;
       const hasStopped = (effectiveStopAge && ageAtMonth >= effectiveStopAge) || isWithdrawing;
       
-      const annualGrowthRate = hasStopped ? inflationRate : clampNumber(b.annualRate);
+      // Growth logic:
+      // If we are currently in a withdrawal phase, use inflationRate as a proxy for 'real growth' 
+      // of the pot during drawdown, otherwise use the bucket's own annualRate.
+      const annualGrowthRate = isWithdrawing ? inflationRate : clampNumber(b.annualRate);
       const monthlyRate = annualGrowthRate / 100 / 12;
       
       if (isWithdrawing) {

@@ -125,8 +125,44 @@ export function ResultRows({ rows }: { rows: [string, string | number][] }) {
 }
 
 // ... rest of imports ...
-type SectionId = "overview" | "income" | "tax" | "budget" | "savings" | "mortgage" | "retirement" | "coastfire" | "profile" | "settings";
+type SectionId = "overview" | "income" | "tax" | "budget" | "savings" | "mortgage" | "retirement" | "coastfire" | "assets" | "profile" | "settings";
 
+function AssetsSection({ assets, setAssets }: { assets: Asset[]; setAssets: React.Dispatch<React.SetStateAction<Asset[]>> }) {
+  const addAsset = () => setAssets([...assets, { id: uid(), label: "New Asset", value: 0 }]);
+  const updateAsset = (id: string, patch: Partial<Asset>) => {
+    setAssets(assets.map(a => (a.id === id ? { ...a, ...patch } : a)));
+  };
+  const removeAsset = (id: string) => setAssets(assets.filter(a => a.id !== id));
+
+  return (
+    <div className="workspace">
+      <section className="panel span-12">
+        <h2>Large Assets</h2>
+        <div className="budget-lines">
+          {assets.map((asset) => (
+            <div key={asset.id} className="budget-row">
+              <div className="label-field">
+                <TextInput value={asset.label} onChange={(label) => updateAsset(asset.id, { label })} />
+              </div>
+              <div className="amount-field" style={{ gridColumn: 'span 3' }}>
+                <NumberInput value={asset.value} onChange={(value) => updateAsset(asset.id, { value })} />
+              </div>
+              <button className="delete-btn" onClick={() => removeAsset(asset.id)}>×</button>
+            </div>
+          ))}
+          <button className="wide-action" onClick={addAsset}>+ Add Asset</button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+
+export type Asset = {
+  id: string;
+  label: string;
+  value: number;
+};
 
 type Plan = {
   id: string;
@@ -140,8 +176,10 @@ type Plan = {
     budgetLines: BudgetLine[];
     annualBills: ExpenseLine[];
     savings: SavingsBucket[];
+    assets: Asset[];
     projectionYears: number;
-    mortgage: MortgageInputs;
+    mortgages: MortgageInputs[];
+    mortgage?: MortgageInputs;
     birthYear: number;
     birthMonth: number;
     retirementAge: number;
@@ -155,6 +193,7 @@ type Plan = {
     showLisaUnder60?: boolean;
     includeStatePension?: boolean;
     showMortgageCard?: boolean;
+    showAssetsCard?: boolean;
     showCoastFireCard?: boolean;
     swr?: number;
     realGrowth?: number;
@@ -243,15 +282,9 @@ function App() {
   const [excludedSavings, setExcludedSavings] = useState<string[]>([]);
   const [annualBills, setAnnualBills] = useState(initialAnnualBills);
   const [savings, setSavings] = useState(initialSavings);
+  const [assets, setAssets] = useState<Asset[]>([]);
   const [projectionYears, setProjectionYears] = useState(10);
-  const [mortgage, setMortgage] = useState<MortgageInputs>({
-    amount: 0,
-    annualRate: 0,
-    years: 0,
-    monthlyOverpayment: 0,
-    oneOffMonth: 0,
-    oneOffAmount: 0,
-  });
+  const [mortgages, setMortgages] = useState<MortgageInputs[]>([{ amount: 0, annualRate: 4, years: 25, monthlyOverpayment: 0, oneOffMonth: 0, oneOffAmount: 0 }]);
 
   const [birthYear, setBirthYear] = useState(1990);
   const [birthMonth, setBirthMonth] = useState(1);
@@ -265,12 +298,27 @@ function App() {
   const [showLisaUnder60, setShowLisaUnder60] = useState(true);
   const [includeStatePension, setIncludeStatePension] = useState(true);
   const [showMortgageCard, setShowMortgageCard] = useState(true);
+  const [showAssetsCard, setShowAssetsCard] = useState(true);
   const [showCoastFireCard, setShowCoastFireCard] = useState(false);
   const [swr, setSwr] = useState(4);
   const [realGrowth, setRealGrowth] = useState(3);
 
   const [pendingContributions, setPendingContributions] = useState<{bucketId: string, count: number, totalAmount: number}[]>([]);
   const [pendingMortgageUpdate, setPendingMortgageUpdate] = useState<{months: number, newBalance: number, payments: number} | null>(null);
+  const hasMortgages = mortgages.length > 0;
+  
+  // Auto-activate mortgage card if it's off but mortgages exist, or prompt to add if empty and card is on
+  useEffect(() => {
+    if (hasMortgages && !showMortgageCard) {
+      setShowMortgageCard(true);
+    }
+  }, [hasMortgages, showMortgageCard]);
+
+  const addDefaultMortgage = () => {
+    setMortgages([{ amount: 200000, annualRate: 4, years: 25, monthlyOverpayment: 0, oneOffMonth: 0, oneOffAmount: 0 }]);
+    setShowMortgageCard(true);
+  };
+
   const hasCheckedGrowth = React.useRef(false);
 
   const confirmContributions = () => {
@@ -290,13 +338,13 @@ function App() {
     setSavings(newSavings);
 
     if (pendingMortgageUpdate) {
-      setMortgage({
-        ...mortgage,
+      setMortgages(mortgages.map(m => ({
+        ...m,
         amount: pendingMortgageUpdate.newBalance,
-        years: Math.max(0, mortgage.years - (pendingMortgageUpdate.months / 12)),
-        oneOffMonth: Math.max(0, mortgage.oneOffMonth - pendingMortgageUpdate.months),
+        years: Math.max(0, m.years - (pendingMortgageUpdate.months / 12)),
+        oneOffMonth: Math.max(0, m.oneOffMonth - pendingMortgageUpdate.months),
         lastUpdated: today
-      });
+      })));
       setPendingMortgageUpdate(null);
     }
 
@@ -335,8 +383,8 @@ function App() {
       setPendingContributions(pending);
 
       // Check for mortgage updates
-      const mortgageUpdate = calculateMortgageUpdate(mortgage, today);
-      if (mortgageUpdate.monthsElapsed > 0) {
+      const mortgageUpdate = mortgages.length > 0 ? calculateMortgageUpdate(mortgages[0], today) : { monthsElapsed: 0 };
+      if (mortgageUpdate.monthsElapsed > 0 && 'newBalance' in mortgageUpdate) {
         setPendingMortgageUpdate({
           months: mortgageUpdate.monthsElapsed,
           newBalance: mortgageUpdate.newBalance,
@@ -346,7 +394,7 @@ function App() {
 
       hasCheckedGrowth.current = true;
     }
-  }, [authLoading, user, savings, mortgage]);
+  }, [authLoading, user, savings, mortgages]);
 
   const STATE_PENSION_AGE = 67;
   const ANNUAL_STATE_PENSION = 11502.40; // 2024/25
@@ -361,8 +409,10 @@ function App() {
     setBudgetLines([]);
     setAnnualBills([]);
     setSavings([]);
+    setAssets([]);
     setOtherRetirementIncome([]);
     setAdditionalRetirementExpenses([]);
+    setMortgages([]);
 
     if (scenario === 'nurse') {
       setPaye([
@@ -430,7 +480,7 @@ function App() {
       { id: uid(), label: "Council Tax", amount: 160, bucket: "housing", includeInRetirement: true },
       { id: uid(), label: "Energy", amount: 180, bucket: "housing", includeInRetirement: true }
     ]);
-    setMortgage({ amount: 200000, annualRate: 4.2, years: 25, monthlyOverpayment: 0, oneOffMonth: 0, oneOffAmount: 0 });
+    setMortgages([{ amount: 200000, annualRate: 4.2, years: 25, monthlyOverpayment: 0, oneOffMonth: 0, oneOffAmount: 0 }]);
     setExpectedOutgoings(2500);
     setDrawdownRate(4);
     setInflationRate(3);
@@ -444,7 +494,7 @@ function App() {
     annualBills,
     savings,
     projectionYears,
-    mortgage,
+    mortgages,
     birthYear,
     birthMonth,
     expectedOutgoings,
@@ -457,15 +507,16 @@ function App() {
     showLisaUnder60,
     includeStatePension,
     showMortgageCard,
+    showAssetsCard,
     showCoastFireCard,
     swr,
     realGrowth,
   }), [
     paye, selfEmployment, taxSettings, budgetLines, annualBills, savings,
-    projectionYears, mortgage, birthYear, birthMonth, expectedOutgoings,
+    projectionYears, mortgages, birthYear, birthMonth, expectedOutgoings,
     drawdownRate, otherRetirementIncome, drawdownSettings, inflationRate,
     additionalRetirementExpenses, retirementTaxableFraction, showLisaUnder60,
-    includeStatePension, showMortgageCard, showCoastFireCard, swr, realGrowth
+    includeStatePension, showMortgageCard, showAssetsCard, showCoastFireCard, swr, realGrowth
   ]);
 
   const [lastSavedData, setLastSavedData] = useState<string>(currentDataString);
@@ -536,8 +587,16 @@ function App() {
     setBudgetLines(d.budgetLines);
     setAnnualBills(d.annualBills);
     setSavings(d.savings);
+    setAssets(d.assets || []);
     setProjectionYears(d.projectionYears);
-    setMortgage(d.mortgage);
+    // Handle both new 'mortgages' array and legacy 'mortgage' object
+    if (d.mortgages) {
+      setMortgages(d.mortgages);
+    } else if (d.mortgage) {
+      setMortgages([d.mortgage]);
+    } else {
+      setMortgages([]);
+    }
     setBirthYear(d.birthYear || 1990);
     setBirthMonth(d.birthMonth || 1);
     setExpectedOutgoings(d.expectedOutgoings || 0);
@@ -550,6 +609,7 @@ function App() {
     setShowLisaUnder60(d.showLisaUnder60 ?? true);
     setIncludeStatePension(d.includeStatePension ?? true);
     setShowMortgageCard(d.showMortgageCard ?? true);
+    setShowAssetsCard(d.showAssetsCard ?? true);
     setShowCoastFireCard(d.showCoastFireCard ?? false);
     setSwr(d.swr ?? 4);
     setRealGrowth(d.realGrowth ?? 3);
@@ -563,7 +623,7 @@ function App() {
       annualBills: d.annualBills,
       savings: d.savings,
       projectionYears: d.projectionYears,
-      mortgage: d.mortgage,
+      mortgages: mortgages,
       birthYear: d.birthYear || 1990,
       birthMonth: d.birthMonth || 1,
       expectedOutgoings: d.expectedOutgoings || 0,
@@ -591,8 +651,9 @@ function App() {
       budgetLines,
       annualBills,
       savings,
+      assets,
       projectionYears,
-      mortgage,
+      mortgages,
       birthYear,
       birthMonth,
       expectedOutgoings,
@@ -604,6 +665,9 @@ function App() {
       retirementTaxableFraction,
       showLisaUnder60,
       includeStatePension,
+      showMortgageCard,
+      showAssetsCard,
+      showCoastFireCard,
     };
 
     if (currentPlanId) {
@@ -644,15 +708,9 @@ function App() {
     setBudgetLines(initialBudget);
     setAnnualBills(initialAnnualBills);
     setSavings(initialSavings);
+    setAssets([]);
     setProjectionYears(10);
-    setMortgage({
-      amount: 0,
-      annualRate: 4,
-      years: 25,
-      monthlyOverpayment: 0,
-      oneOffMonth: 0,
-      oneOffAmount: 0,
-    });
+    setMortgages([]);
     setBirthYear(1990);
     setBirthMonth(1);
     setExpectedOutgoings(0);
@@ -664,6 +722,9 @@ function App() {
     setRetirementTaxableFraction(0.75);
     setShowLisaUnder60(true);
     setIncludeStatePension(true);
+    setShowMortgageCard(true);
+    setShowAssetsCard(true);
+    setShowCoastFireCard(false);
     
     // Reset lastSavedData to the "new plan" state
     const newDataString = JSON.stringify({
@@ -677,15 +738,9 @@ function App() {
       budgetLines: initialBudget,
       annualBills: initialAnnualBills,
       savings: initialSavings,
+      assets: [],
       projectionYears: 10,
-      mortgage: {
-        amount: 0,
-        annualRate: 4,
-        years: 25,
-        monthlyOverpayment: 0,
-        oneOffMonth: 0,
-        oneOffAmount: 0,
-      },
+      mortgages: [],
       birthYear: 1990,
       birthMonth: 1,
       expectedOutgoings: 0,
@@ -697,6 +752,9 @@ function App() {
       retirementTaxableFraction: 0.75,
       showLisaUnder60: true,
       includeStatePension: true,
+      showMortgageCard: true,
+      showAssetsCard: false,
+      showCoastFireCard: false,
     });
     setLastSavedData(newDataString);
   };
@@ -731,8 +789,8 @@ const projectionBuckets = useMemo(() => {
     return savings;
   }, [savings]);
   const budget = useMemo(
-    () => budgetSummary(tax.monthlyNet, budgetLines, annualBills, savingsForBudget, mortgage.monthlyOverpayment),
-    [tax.monthlyNet, budgetLines, annualBills, savingsForBudget, mortgage.monthlyOverpayment],
+    () => budgetSummary(tax.monthlyNet, budgetLines, annualBills, savingsForBudget, mortgages.reduce((sum, m) => sum + m.monthlyOverpayment, 0)),
+    [tax.monthlyNet, budgetLines, annualBills, savingsForBudget, mortgages],
   );
 
   const filteredBudgetLines = useMemo(() => {
@@ -744,8 +802,8 @@ const projectionBuckets = useMemo(() => {
   }, [savingsForBudget, excludedSavings]);
 
   const activeMortgageOverpayment = useMemo(() => {
-    return !excludedSavings.includes('mortgage-overpayment') ? mortgage.monthlyOverpayment : 0;
-  }, [excludedSavings, mortgage.monthlyOverpayment]);
+    return !excludedSavings.includes('mortgage-overpayment') ? mortgages.reduce((sum, m) => sum + m.monthlyOverpayment, 0) : 0;
+  }, [excludedSavings, mortgages]);
 
   const includedBudget = useMemo(
     () => budgetSummary(tax.monthlyNet, filteredBudgetLines, annualBills, filteredSavingsForBudget, activeMortgageOverpayment),
@@ -768,7 +826,7 @@ const projectionBuckets = useMemo(() => {
   () => projectSavings(projectionBuckets, projectionYears, birthYear, drawdownSettings, inflationRate),
   [projectionBuckets, projectionYears, birthYear, drawdownSettings, inflationRate],
 );
-  const mortgageSummary = useMemo(() => calculateMortgage(mortgage), [mortgage]);
+  const mortgageSummaries = useMemo(() => mortgages.map(m => calculateMortgage(m)), [mortgages]);
   const targetGross = useMemo(
     () => requiredGrossForNet(
       Math.max(0, includedBudget.monthlyOut * 12), 
@@ -932,7 +990,7 @@ const projectionBuckets = useMemo(() => {
     const totalAnnualNet = totalAnnualGross - taxResult.totalTax;
     
     // Detailed Retirement Cost Calculation
-    const mortgagePaidOffByRetirement = mortgageSummary.payoffYears <= projectionYears;
+    const mortgagePaidOffByRetirement = mortgageSummaries.every(ms => ms.payoffYears <= projectionYears);
 
     const retiredBudgetLinesTotal = budgetLines
         .filter(l => {
@@ -974,7 +1032,7 @@ const projectionBuckets = useMemo(() => {
       taxResult,
       inflationFactor
     };
-  }, [projectedSavings, retirementAge, otherRetirementIncome, expectedOutgoings, drawdownSettings, pensionAccessAge, nhsJobsGross, civilServiceJobsGross, teachersJobsGross, projectionYears, taxSettings, isBucketAccessible, budget.monthlyExpenses, inflationRate, budgetLines, annualBills, additionalRetirementExpenses, showLisaUnder60]);
+  }, [projectedSavings, retirementAge, otherRetirementIncome, expectedOutgoings, drawdownSettings, pensionAccessAge, nhsJobsGross, civilServiceJobsGross, teachersJobsGross, projectionYears, taxSettings, isBucketAccessible, budget.monthlyExpenses, inflationRate, budgetLines, annualBills, additionalRetirementExpenses, showLisaUnder60, mortgageSummaries]);
 
   const currentAccessibleWealth = savings.filter(s => isBucketAccessible(s, currentAge)).reduce((sum, s) => sum + s.balance, 0);
   const currentLockedWealth = savings.filter(s => !isBucketAccessible(s, currentAge)).reduce((sum, s) => sum + s.balance, 0);
@@ -996,7 +1054,7 @@ const projectionBuckets = useMemo(() => {
   ), [currentAge, retirementAge, pensionAccessAge, currentAccessibleWealth, currentLockedWealth, retirementSummary.currentMonthlyExpenses, annualAccessibleContribution, annualLockedContribution, realGrowth, swr]);
 
   
-  const sections = [
+  const sections: { id: SectionId; title: string; value: string; detail: string; color: string; subValue?: string; subLabel?: string }[] = [
     { id: "overview", title: "Overview", value: monthlyMoney.format(overviewBudget.monthlySurplus), detail: "monthly surplus", color: "linear-gradient(135deg, #f0f7ff 0%, #ddebfa 100%)" },
     { id: "income", title: "Income", value: money.format(tax.payeGross + tax.selfProfit), detail: "gross + profit", color: "linear-gradient(135deg, #f0fff4 0%, #e0f9e8 100%)" },
     { id: "budget", title: "Budget", value: monthlyMoney.format(overviewBudget.monthlyOut), detail: "monthly outflow", color: "linear-gradient(135deg, #fffaf0 0%, #f8ecd4 100%)" },
@@ -1008,14 +1066,14 @@ const projectionBuckets = useMemo(() => {
       detail: money.format(accessibleProjectedTotal),
       color: "linear-gradient(135deg, #fffcf3 0%, #95cb99 100%)"
     },
-    ...(showMortgageCard ? [{ 
+    ...(showMortgageCard ? mortgages.map((m, i) => ({ 
       id: "mortgage" as SectionId, 
-      title: "Mortgage", 
-      value: money.format(mortgage.amount), 
-      subValue: `${mortgageSummary.payoffYears.toFixed(1)} yrs payoff`,
+      title: `Mortgage ${i + 1}`, 
+      value: money.format(m.amount), 
+      subValue: `${mortgageSummaries[i].payoffYears.toFixed(1)} yrs payoff`,
       detail: "current balance",
       color: "linear-gradient(135deg, #fff5f5 0%, #f7d9d9 100%)" 
-    }] : []),
+    })) : []),
     { id: "retirement" as SectionId, title: "Retirement", value: monthlyMoney.format(retirementSummary.monthlyIn), detail: `${projectionYears.toFixed(2)} year projection`, color: "linear-gradient(135deg, #f3e8ff 0%, #e8dded 100%)"},
     ...(showCoastFireCard ? [{ 
       id: "coastfire" as SectionId, 
@@ -1024,7 +1082,14 @@ const projectionBuckets = useMemo(() => {
       detail: coastFireResult.isCoastFire ? "contributions optional" : "estimated coast age",
       color: "linear-gradient(135deg, #fffcf3 0%, #fdf9e2 100%)"
     }] : []),
-  ] satisfies { id: SectionId; title: string; value: string; detail: string; color: string; subValue?: string; subLabel?: string }[];
+    ...(showAssetsCard ? [{ 
+      id: "assets" as SectionId, 
+      title: "Assets", 
+      value: money.format(assets.reduce((sum, a) => sum + a.value, 0)), 
+      detail: "non-mortgaged assets", 
+      color: "linear-gradient(135deg, #f0f7ff 0%, #ddebfa 100%)" 
+    }] : []),
+  ];
 
   if (authLoading) return <div className="loading-screen">Loading application...</div>;
   if (!user) return <AuthScreen />;
@@ -1130,6 +1195,8 @@ const projectionBuckets = useMemo(() => {
           onLoadDemo={loadDemoScenario}
           showMortgageCard={showMortgageCard}
           setShowMortgageCard={setShowMortgageCard}
+          showAssetsCard={showAssetsCard}
+          setShowAssetsCard={setShowAssetsCard}
           showCoastFireCard={showCoastFireCard}
           setShowCoastFireCard={setShowCoastFireCard}
         />
@@ -1155,7 +1222,7 @@ const projectionBuckets = useMemo(() => {
          savings={savingsForBudget}
          excludedSavings={excludedSavings}
          setExcludedSavings={setExcludedSavings}
-         mortgage={mortgage}
+         mortgages={mortgages}
        />
       ) : null}
       {activeSection === "income" ? (
@@ -1176,7 +1243,7 @@ const projectionBuckets = useMemo(() => {
           annualBills={annualBills}
           setAnnualBills={setAnnualBills}
           savings={savingsForBudget}
-          mortgageOverpayment={mortgage.monthlyOverpayment}
+          mortgageOverpayment={mortgages[0].monthlyOverpayment}
           setActiveSection={setActiveSection}
         />
       ) : null}
@@ -1197,13 +1264,18 @@ const projectionBuckets = useMemo(() => {
             teachersJobsGross={teachersJobsGross}
             drawdownSettings={drawdownSettings}
             birthYear={birthYear}
-            mortgage={mortgage}
+            mortgages={mortgages}
+            assets={assets}
             currentAge={currentAge}
           />
             ) : null}
 
+      {activeSection === "assets" ? (
+        <AssetsSection assets={assets} setAssets={setAssets} />
+      ) : null}
+
       {activeSection === "mortgage" ? (
-        <MortgageSection mortgage={mortgage} setMortgage={setMortgage} mortgageSummary={mortgageSummary} />
+        <MortgageSection mortgages={mortgages} setMortgages={setMortgages} mortgageSummaries={mortgageSummaries} />
       ) : null}
 
       {activeSection === "coastfire" ? (
@@ -1255,8 +1327,8 @@ const projectionBuckets = useMemo(() => {
           setTaxableFraction={setRetirementTaxableFraction}
           taxSettings={taxSettings}
           drawdownRate={drawdownRate}
-          mortgage={mortgage}
-          mortgageSummary={mortgageSummary}
+          mortgage={mortgages[0]}
+          mortgageSummary={mortgageSummaries[0]}
           birthYear={birthYear}
           setBirthYear={setBirthYear}
           birthMonth={birthMonth}
@@ -2018,7 +2090,7 @@ function RetirementSection({
               {projectedSavings.map((bucket: any) => {
                 const accessible = isBucketAccessible(bucket.type, retirementAge);
                 const isPension = bucket.type === 'pension' || bucket.type === 'workplace-pension' || bucket.type === 'workplace-private-pension';
-                const settings = drawdownSettings[bucket.id] || { rate: 4, lumpSumTaken: false, useStopAge: false, useWithdrawAge: false, stopAge: 60, withdrawAge: 60 };
+                const settings = drawdownSettings[bucket.id] || { rate: 0, lumpSumTaken: false, useStopAge: false, useWithdrawAge: false, stopAge: 60, withdrawAge: 60 };
                 
                 return (
                   <div className={`table-row ${!accessible ? "deselected" : ""}`} key={bucket.id}>
@@ -2047,8 +2119,8 @@ function RetirementSection({
                         <span style={{ fontSize: '0.8rem', color: '#2c5282' }}>Defined Benefit (Fixed)</span>
                       ) : (
                         <NumberInput 
-                          placeholder="4"
-                          value={settings.rate ?? 4} 
+                          placeholder="0"
+                          value={settings.rate ?? 0} 
                           onChange={(rate) => {
                             setDrawdownSettings({ ...drawdownSettings, [bucket.id]: { ...settings, rate } });
                           }}
@@ -2074,16 +2146,7 @@ function RetirementSection({
                         <div>
                         <div className="mobile-label">Withdrawal Age</div>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                        <input
-                          type="checkbox"
-                          checked={settings.useWithdrawAge}
-                          onChange={(e) => setDrawdownSettings({...drawdownSettings, [bucket.id]: {...settings, useWithdrawAge: e.target.checked}})}
-                        />
-                        {settings.useWithdrawAge && (
-                          <div className="age-input-container" style={{ width: '60px' }}>
-                            <NumberInput value={settings.withdrawAge} onChange={(val) => setDrawdownSettings({...drawdownSettings, [bucket.id]: {...settings, withdrawAge: val}})} max={120} />
-                          </div>
-                        )}
+                        <NumberInput value={settings.withdrawAge} onChange={(val) => setDrawdownSettings({...drawdownSettings, [bucket.id]: {...settings, withdrawAge: val}})} max={120} />
                         </div>                    </div>
                   </div>
                 );
@@ -2205,7 +2268,7 @@ function OverviewSection({
   savings,
   excludedSavings,
   setExcludedSavings,
-  mortgage,
+  mortgages,
 }: {
   budget: any;
   tax: ReturnType<typeof calculateTaxSummary>;
@@ -2221,9 +2284,11 @@ function OverviewSection({
   savings: SavingsBucket[];
   excludedSavings: string[];
   setExcludedSavings: (ids: string[]) => void;
-  mortgage: MortgageInputs;
+  mortgages: MortgageInputs[];
 }) {
   const [showPensionInput, setShowPensionInput] = useState(!!taxSettings.pensionRate);
+
+  const totalOverpayment = mortgages.reduce((sum, m) => sum + m.monthlyOverpayment, 0);
 
   return (
     <div className="workspace overview-workspace">
@@ -2298,7 +2363,7 @@ function OverviewSection({
                   }
                 }}
               />
-              Mortgage Overpayment ({monthlyMoney.format(mortgage.monthlyOverpayment)})
+              Mortgage Overpayment ({monthlyMoney.format(totalOverpayment)})
             </label>
           </div>
         </details>
@@ -2867,13 +2932,14 @@ function TaxSection({ tax, sippNetContribution }: any) {
     </div>
   );
 }
-function SettingsSection({ 
-  taxSettings, setTaxSettings, 
-  birthYear, setBirthYear, 
-  birthMonth, setBirthMonth, 
-  tax, 
+function SettingsSection({
+  taxSettings, setTaxSettings,
+  birthYear, setBirthYear,
+  birthMonth, setBirthMonth,
+  tax,
   onLoadDemo,
   showMortgageCard, setShowMortgageCard,
+  showAssetsCard, setShowAssetsCard,
   showCoastFireCard, setShowCoastFireCard
 }: any) {
   return (
@@ -2926,6 +2992,10 @@ function SettingsSection({
           <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', marginTop: '8px' }}>
             <input type="checkbox" checked={showMortgageCard} onChange={(e) => setShowMortgageCard(e.target.checked)} />
             Show Mortgage Card
+          </label>
+          <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', marginTop: '8px' }}>
+            <input type="checkbox" checked={showAssetsCard} onChange={(e) => setShowAssetsCard(e.target.checked)} />
+            Show Assets Card
           </label>
           <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', marginTop: '8px' }}>
             <input type="checkbox" checked={showCoastFireCard} onChange={(e) => setShowCoastFireCard(e.target.checked)} />
@@ -3300,9 +3370,9 @@ function BudgetSection({
   );
 }
 
-function WealthSummaryCard({ savings, mortgage, currentAge }: { savings: SavingsBucket[], mortgage: MortgageInputs, currentAge: number }) {
+function WealthSummaryCard({ savings, mortgages = [], assets = [], currentAge }: { savings: SavingsBucket[], mortgages: MortgageInputs[], assets: Asset[], currentAge: number }) {
   const summary = useMemo(() => {
-    return savings.reduce((acc, bucket) => {
+    const savingsSummary = savings.reduce((acc, bucket) => {
       const { currentValue, contributed, other } = calculateCurrentBucketValue(bucket);
       const accessible = isBucketAccessible(bucket, currentAge);
 
@@ -3328,9 +3398,18 @@ function WealthSummaryCard({ savings, mortgage, currentAge }: { savings: Savings
       locked: 0,
       accessibleBreakdown: { cash: 0, isa: 0, lisa: 0 }
     });
-  }, [savings, currentAge]);
 
-  const netWealth = summary.totalValue - mortgage.amount;
+    const assetsTotal = assets.reduce((sum, a) => sum + a.value, 0);
+    
+    return {
+      ...savingsSummary,
+      totalValue: savingsSummary.totalValue + assetsTotal,
+      assetsTotal
+    };
+  }, [savings, assets, currentAge]);
+
+  const mortgage = mortgages.length > 0 ? mortgages[0] : { amount: 0 };
+  const netWealth = summary.totalValue - (mortgage.amount || 0);
 
   const total = summary.totalValue || 1;
   const contribPct = (summary.contributed / total) * 100;
@@ -3372,24 +3451,94 @@ function WealthSummaryCard({ savings, mortgage, currentAge }: { savings: Savings
     </svg>
   );
 
+  // Pie chart for Net Wealth (Total Assets vs Mortgage Debt)
+  const netWealthChart = (
+    <svg viewBox="0 0 32 32" style={{ width: '60px', height: '60px', flexShrink: 0, borderRadius: '50%' }}>
+      {/* Background circle */}
+      <circle r="16" cx="16" cy="16" style={{ fill: '#ddebfa' }} /> 
+      
+      {/* Calculate parts of the pie based on absolute values */}
+      {(() => {
+        // summary.totalValue now includes assetsTotal
+        const total = Math.abs(summary.totalValue) + Math.abs(mortgage.amount);
+        if (total === 0) return null;
+        
+        const assetPct = (Math.abs(summary.totalValue) / total) * 100;
+        const debtPct = (Math.abs(mortgage.amount) / total) * 100;
+        
+        return (
+          <>
+            {/* Green slice for Total Assets (Savings + Large Assets) */}
+            {summary.totalValue > 0 && (
+              <circle 
+                r="16" cx="16" cy="16" 
+                style={{ 
+                  fill: '#27ae60',
+                  strokeWidth: 32, 
+                  strokeDasharray: `${assetPct} 100`, 
+                  strokeDashoffset: 0 
+                }} 
+              />
+            )}
+            {/* Red slice for Debt */}
+            {mortgage.amount > 0 && (
+              <circle 
+                r="16" cx="16" cy="16" 
+                style={{ 
+                  fill: 'transparent', 
+                  stroke: '#c0392b',
+                  strokeWidth: 32, 
+                  strokeDasharray: `${debtPct} 100`, 
+                  strokeDashoffset: -assetPct 
+                }} 
+              />
+            )}
+          </>
+        );
+      })()}
+    </svg>
+  );
+
   return (
     <section className="panel span-12" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '20px' }}>
       <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
         <h2>Net Wealth</h2>
         <div style={{ display: "flex", alignItems: "center", gap: "20px" }}>
-          <div style={{ width: '60px', height: '60px', background: '#f0f7ff', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.5rem' }}>💰</div>
+          {netWealthChart}
           <div style={{ flex: 1 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", paddingBottom: "10px", marginBottom: "10px", borderBottom: "1px solid #eee" }}>
+            <div style={{ display: "flex", justifyContent: "flex-start", gap: "10px", alignItems: "center", paddingBottom: "10px", marginBottom: "10px", borderBottom: "1px solid #eee" }}>
               <span>Net Wealth</span>
               <strong>{money.format(netWealth)}</strong>
             </div>
-            <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.85rem", color: "#24594f" }}>
-              <span>Total Assets</span>
+            <div style={{ display: "flex", justifyContent: "flex-start", gap: "10px", fontSize: "0.85rem", color: "#24594f" }}>
+              <span>Total Assets: </span>
+              {/* <span>Total Assets (Savings: {money.format(summary.totalValue - summary.assetsTotal)} + Assets: {money.format(summary.assetsTotal)})</span> */}
               <strong>{money.format(summary.totalValue)}</strong>
             </div>
-            <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.85rem", color: "#c0392b" }}>
+            <div style={{ display: "flex", justifyContent: "flex-start", gap: "10px", fontSize: "0.85rem", color: "#c0392b" }}>
               <span>Mortgage Debt</span>
               <strong>{money.format(mortgage.amount)}</strong>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
+        <h2>Accessible Funds</h2>
+        <div style={{ display: "flex", alignItems: "center", gap: "20px" }}>
+          {accessibleBreakdownChart}
+          <div style={{ flex: 1 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.85rem", color: "#3498db" }}>
+              <span>Cash</span>
+              <strong>{money.format(summary.accessibleBreakdown.cash)}</strong>
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.85rem", color: "#9b59b6" }}>
+              <span>ISA</span>
+              <strong>{money.format(summary.accessibleBreakdown.isa)}</strong>
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.85rem", color: "#f1c40f" }}>
+              <span>LISA</span>
+              <strong>{money.format(summary.accessibleBreakdown.lisa)}</strong>
             </div>
           </div>
         </div>
@@ -3435,7 +3584,7 @@ function WealthSummaryCard({ savings, mortgage, currentAge }: { savings: Savings
 function SavingsSection({
   savings, setSavings, projectionYears, setProjectionYears, projectedSavings, projectedTotal, allProjectedTotal,
   employmentPensionMonthly, employerPensionMonthly, nhsJobsGross, civilServiceJobsGross, teachersJobsGross,
-  drawdownSettings, birthYear, mortgage, currentAge
+  drawdownSettings, birthYear, mortgages, assets, currentAge
 }: any) {
   const refs = useMemo(() => savings.reduce((acc: any, b: any) => ({ ...acc, [b.id]: React.createRef<HTMLDivElement>() }), {}), [savings]);
   
@@ -3451,13 +3600,13 @@ function SavingsSection({
 
   return (
     <div className="workspace">
-      <WealthSummaryCard savings={savings} mortgage={mortgage} currentAge={currentAge} />
+      <WealthSummaryCard savings={savings} mortgages={mortgages} assets={assets} currentAge={currentAge} />
       <section className="panel span-12">
-        <div className="split-title">
+        <div className="split-title" style={{ flexDirection: isMobile ? 'column' : 'row', alignItems: isMobile ? 'flex-start' : 'center', gap: '12px' }}>
           <h2>Savings Manager</h2>
-          <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "12px", flexWrap: 'wrap' }}>
             <button className="secondary" onClick={handleExportCSV} style={{ fontSize: '0.75rem', height: '32px' }}>Download CSV Statement</button>
-            <span style={{ fontSize: "0.9rem", color: "#666" }}>Projection Period:</span>
+            <span style={{ fontSize: "0.9rem", color: "#666", whiteSpace: 'nowrap' }}>Projection Period:</span>
             <div style={{ width: "100px" }}>
               <NumberInput placeholder="10" value={parseFloat(projectionYears.toFixed(2))} onChange={setProjectionYears} suffix="yrs" />
             </div>
@@ -3569,33 +3718,70 @@ function SavingsSection({
   );
 }
 createRoot(document.getElementById("root")!).render(<App />);
-function MortgageSection({
-  mortgage,
-  setMortgage,
-  mortgageSummary,
-}: {
-  mortgage: MortgageInputs;
-  setMortgage: React.Dispatch<React.SetStateAction<MortgageInputs>>;
-  mortgageSummary: ReturnType<typeof calculateMortgage>;
-}) {
+function MortgageSection({ mortgages, setMortgages, mortgageSummaries }: { mortgages: MortgageInputs[]; setMortgages: React.Dispatch<React.SetStateAction<MortgageInputs[]>>; mortgageSummaries: any[] }) {
+  const addMortgage = () => setMortgages([...mortgages, { amount: 0, annualRate: 4, years: 25, monthlyOverpayment: 0, oneOffMonth: 0, oneOffAmount: 0 }]);
+  const updateMortgage = (index: number, patch: Partial<MortgageInputs>) => {
+    setMortgages(mortgages.map((m, i) => (i === index ? { ...m, ...patch } : m)));
+  };
+  const removeMortgage = (index: number) => setMortgages(mortgages.filter((_, i) => i !== index));
+
+  if (mortgages.length === 0) {
+    return (
+      <div className="workspace">
+        <section className="panel span-12" style={{ textAlign: 'center', padding: '40px' }}>
+          <h2>No Mortgage Accounts</h2>
+          <p>You haven't added any mortgage accounts yet.</p>
+          <button className="primary" onClick={addMortgage}>+ Add First Mortgage</button>
+        </section>
+      </div>
+    );
+  }
+
   return (
-    <section className="panel span-12 mortgage-panel">
-      <h2>Mortgage Estimator</h2>
-      <div className="mortgage-grid">
-        <label>Mortgage amount <NumberInput placeholder="0" value={mortgage.amount} onChange={(amount) => setMortgage({ ...mortgage, amount })} /></label>
-        <label>Annual rate % <NumberInput placeholder="0" value={mortgage.annualRate} onChange={(annualRate) => setMortgage({ ...mortgage, annualRate })} /></label>
-        <label>Term years <NumberInput placeholder="0" value={mortgage.years} onChange={(years) => setMortgage({ ...mortgage, years })} max={120} /></label>
-        <label>Monthly overpayment <NumberInput placeholder="0" value={mortgage.monthlyOverpayment} onChange={(monthlyOverpayment) => setMortgage({ ...mortgage, monthlyOverpayment })} /></label>
-        <label>One-off month <NumberInput placeholder="0" value={mortgage.oneOffMonth} onChange={(oneOffMonth) => setMortgage({ ...mortgage, oneOffMonth })} /></label>
-        <label>One-off amount <NumberInput placeholder="0" value={mortgage.oneOffAmount} onChange={(oneOffAmount) => setMortgage({ ...mortgage, oneOffAmount })} /></label>
-        <label>Last updated <input type="date" value={mortgage.lastUpdated || ""} onChange={(e) => setMortgage({ ...mortgage, lastUpdated: e.target.value })} style={{ marginTop: '4px' }} /></label>
-      </div>      <section className="summary-grid tight">
-        <Metric label="Standard payment" value={monthlyMoney.format(mortgageSummary.standardPayment)} />
-        <Metric label="Payoff time" value={`${mortgageSummary.payoffYears.toFixed(1)} years`} />
-        <Metric label="Interest paid" value={money.format(mortgageSummary.totalInterest)} tone="amber" />
-        <Metric label="Interest saved" value={money.format(mortgageSummary.interestSaved)} tone="green" />
-      </section>
-    </section>
+    <div className="workspace">
+      {mortgages.map((mortgage, i) => (
+        <section key={i} className="panel span-12 mortgage-panel">
+          <div className="split-title">
+            <h2>Mortgage {i + 1}</h2>
+            <button className="secondary danger" onClick={() => removeMortgage(i)}>Remove</button>
+          </div>
+          <div className="mortgage-grid">
+            <label>Mortgage amount <NumberInput placeholder="0" value={mortgage.amount} onChange={(amount) => updateMortgage(i, { amount })} /></label>
+            <label>Annual rate % <NumberInput placeholder="0" value={mortgage.annualRate} onChange={(annualRate) => updateMortgage(i, { annualRate })} /></label>
+            <label>Term years <NumberInput placeholder="0" value={mortgage.years} onChange={(years) => updateMortgage(i, { years })} max={120} /></label>
+            <label>Monthly overpayment <NumberInput placeholder="0" value={mortgage.monthlyOverpayment} onChange={(monthlyOverpayment) => updateMortgage(i, { monthlyOverpayment })} /></label>
+            <label>One-off month <NumberInput placeholder="0" value={mortgage.oneOffMonth} onChange={(oneOffMonth) => updateMortgage(i, { oneOffMonth })} /></label>
+            <label>One-off amount <NumberInput placeholder="0" value={mortgage.oneOffAmount} onChange={(oneOffAmount) => updateMortgage(i, { oneOffAmount })} /></label>
+            <label>Last updated <input type="date" value={mortgage.lastUpdated || ""} onChange={(e) => updateMortgage(i, { lastUpdated: e.target.value })} style={{ marginTop: '4px' }} /></label>
+          </div>
+          {mortgageSummaries[i] && (
+            <section className="summary-grid tight">
+              <Metric label="Standard payment" value={monthlyMoney.format(mortgageSummaries[i].standardPayment)} />
+              <Metric label="Payoff time" value={`${mortgageSummaries[i].payoffYears.toFixed(1)} years`} />
+              <Metric label="Interest paid" value={money.format(mortgageSummaries[i].totalInterest)} tone="amber" />
+              <Metric label="Interest saved" value={money.format(mortgageSummaries[i].interestSaved)} tone="green" />
+            </section>
+          )}
+        </section>
+      ))}
+      <div className="span-12">
+        <button 
+          className="primary" 
+          onClick={addMortgage} 
+          style={{ 
+            width: '100%', 
+            padding: '16px 8px', 
+            fontSize: '0.95rem', 
+            whiteSpace: 'normal', 
+            lineHeight: '1.2',
+            textAlign: 'center',
+            marginBottom: '20px'
+          }}
+        >
+          + Add Mortgage Account
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -3616,52 +3802,57 @@ function DepletionChart({ projectedSavings, drawdownSettings, retirementAge, pen
     return true; 
   }; 
 
-  const data = years.map(year => { 
-    const age = Math.round(retirementAge + year); 
-    const buckets = projectedSavings.filter((b: any) => !['nhs-pension', 'civil-service-pension', 'teachers-pension'].includes(b.type) && !b.isHidden).map((bucket: any) => { 
-      const settings = drawdownSettings[bucket.id] || { rate: 4, useWithdrawAge: false, withdrawAge: 60, useStopAge: false, stopAge: 60 }; 
-      
-      // During retirement phase (from Year 0 onwards), we assume contributions have already stopped.
-      // Therefore, growth is always at the economy-wide Inflation Rate (safe haven assets).
-      const r = (inflationRate ?? 3) / 100; 
-      
-      let startingBalance = bucket.finalBalance || 0;
-      
-      // Apply LISA penalty if retiring under 60 (consistent with summary cards)
-      if (bucket.type === 'lisa' && retirementAge < 60) {
-        startingBalance = startingBalance * 0.75;
-      }
+  const data = useMemo(() => {
+    return years.map(year => { 
+      const age = Math.round(retirementAge + year); 
+      const buckets = projectedSavings.filter((b: any) => !['nhs-pension', 'civil-service-pension', 'teachers-pension'].includes(b.type) && !b.isHidden).map((bucket: any) => { 
+        const settings = drawdownSettings[bucket.id] || { enabled: false, rate: 4, useWithdrawAge: false, withdrawAge: 60, useStopAge: false, stopAge: 60 }; 
+        
+        // During retirement phase (from Year 0 onwards), we assume contributions have already stopped.
+        // Therefore, growth is always at the bucket's own annual rate.
+        const r = clampNumber(bucket.annualRate) / 100;
+        
+        let startingBalance = bucket.finalBalance || 0;
+        
+        // Apply LISA penalty if retiring under 60 (consistent with summary cards)
+        if (bucket.type === 'lisa' && retirementAge < 60) {
+          startingBalance = startingBalance * 0.75;
+        }
 
-      let balance;
+        let balance;
 
-      if (!isAccessible(bucket, age, settings)) {
-        // Pot is still growing until withdrawal age
-        // If retirement age is 60 but withdrawal is at 65, it grows for those 5 years
-        const growthYears = Math.max(0, age - retirementAge);
-        balance = startingBalance * Math.pow(1 + r, growthYears);
-      } else {
-        // Pot is in drawdown
-        // 1. Calculate how many years it's been in drawdown relative to the START of the graph (retirementAge)
         const drawdownStartAge = settings.useWithdrawAge ? settings.withdrawAge : (bucket.startWithdrawalAge || retirementAge);
-        const yearsInDrawdown = Math.max(0, age - Math.max(retirementAge, drawdownStartAge));
+        // Pot is in drawdown if (drawdown rate is greater than 0) AND (We are at or past withdrawal age)
+        const isInDrawdown = (settings.rate > 0) && (age >= drawdownStartAge);
 
-        // 2. Growth until drawdown starts (only relevant if drawdown starts AFTER retirement)
-        const yearsUntilDrawdown = Math.max(0, drawdownStartAge - retirementAge);
-        const balanceAtDrawdownStart = startingBalance * Math.pow(1 + r, yearsUntilDrawdown);
-
-        const rate = settings.rate ?? 4;
-        const d = balanceAtDrawdownStart * (rate / 100); 
-        if (r === 0) { 
-          balance = balanceAtDrawdownStart - d * yearsInDrawdown; 
-        } else { 
-          // Standard drawdown formula: P(1+r)^t - (d/r)((1+r)^t - 1)
-          balance = balanceAtDrawdownStart * Math.pow(1 + r, yearsInDrawdown) - (d / r) * (Math.pow(1 + r, yearsInDrawdown) - 1); 
+        if (!isInDrawdown) {
+          // Pot is still growing until withdrawal age
+          const growthYears = Math.max(0, age - retirementAge);
+          balance = startingBalance * Math.pow(1 + r, growthYears);
+        } else {
+          // Pot is in drawdown
+          // We simulate year by year to correctly apply the % rate to the updated balance each year
+          const rate = settings.rate ?? 4;
+          const yearsInDrawdown = Math.max(0, age - Math.max(retirementAge, settings.useWithdrawAge ? settings.withdrawAge : (bucket.startWithdrawalAge || retirementAge)));
+          
+          // Initial balance at drawdown start
+          const drawdownStartAge = settings.useWithdrawAge ? settings.withdrawAge : (bucket.startWithdrawalAge || retirementAge);
+          const yearsUntilDrawdown = Math.max(0, drawdownStartAge - retirementAge);
+          let balanceAtDrawdownStart = startingBalance * Math.pow(1 + r, yearsUntilDrawdown);
+          
+          // Simulate year-by-year from drawdown start to current age
+          balance = balanceAtDrawdownStart;
+          for (let i = 0; i < yearsInDrawdown; i++) {
+            const withdrawal: number = balance * (rate / 100);
+            balance = balance * (1 + r) - withdrawal;
+          }
+          if (balance < 0) balance = 0;
         } 
-      } 
-      return { label: bucket.label, value: Math.max(0, balance) }; 
+        return { label: bucket.label, value: Math.max(0, balance) }; 
       }); 
       return { year, age, buckets }; 
-      }); 
+    });
+  }, [projectedSavings, drawdownSettings, retirementAge, pensionAccessAge, inflationRate, JSON.stringify(drawdownSettings)]);
   if (!data || data.length === 0 || !data[0]?.buckets) return null; 
   if (data[0].buckets.length === 0) return null; 
   return (
@@ -3670,7 +3861,7 @@ function DepletionChart({ projectedSavings, drawdownSettings, retirementAge, pen
         <h3 style={{ margin: 0 }}>Pot Depletion Projection</h3>
         <span 
           className="tooltip-trigger" 
-          data-tooltip={`Growth Assumption: Once retirement starts, all pots are assumed to grow at your Inflation Rate (${inflationRate}%) as investments typically shift to safer, capital-preserving assets.\n\nDepletion: This chart shows how long your pots last based solely on your chosen drawdown rates, independent of your total retirement costs.`}
+          data-tooltip={`Growth Assumption: Once retirement starts, all pots are assumed to grow at their individual Annual Growth Rate, as investments typically shift to safer, capital-preserving assets.\n\nDepletion: This chart shows how long your pots last based solely on your chosen drawdown rates, independent of your total retirement costs.`}
         >
           ⓘ
         </span>
@@ -3693,9 +3884,44 @@ function LineChart({ data, years, colors }: any) {
   const getY = (val: number) => height - padding - (val / maxVal) * (height - 2 * padding);
   const bucketNames = data[0].buckets.map((b: any) => b.label);
 
+  const [hoveredData, setHoveredData] = useState<any>(null);
+  const [hoveredCoords, setHoveredCoords] = useState<{ x: number, y: number } | null>(null);
+
+  const handleMouseMove = (e: React.MouseEvent<SVGSVGElement>) => {
+    const svg = e.currentTarget;
+    const CTM = svg.getScreenCTM();
+    if (!CTM) return;
+    const svgPoint = svg.createSVGPoint();
+    svgPoint.x = e.clientX;
+    svgPoint.y = e.clientY;
+    const transformedPoint = svgPoint.matrixTransform(CTM.inverse());
+
+    // Find the closest year based on x position
+    const closestYearIndex = years.reduce((prev: number, curr: number, index: number) => {
+      const xPos = getX(curr);
+      return Math.abs(xPos - transformedPoint.x) < Math.abs(getX(years[prev]) - transformedPoint.x) ? index : prev;
+    }, 0);
+
+    const yearData = data[closestYearIndex];
+    if (yearData) {
+      setHoveredData(yearData);
+      setHoveredCoords({ x: transformedPoint.x, y: transformedPoint.y });
+    }
+  };
+
+  const handleMouseLeave = () => {
+    setHoveredData(null);
+    setHoveredCoords(null);
+  };
+
   return (
-    <div className='line-chart-container'>
-      <svg viewBox={'0 0 ' + width + ' ' + height} style={{ width: '100%', height: 'auto', background: '#fffaf1', borderRadius: '8px', border: '1px solid #e7e0d5' }}>
+    <div className='line-chart-container' style={{ position: 'relative' }}> {/* Add relative positioning for tooltip */}
+      <svg
+        viewBox={'0 0 ' + width + ' ' + height}
+        style={{ width: '100%', height: 'auto', background: '#fffaf1', borderRadius: '8px', border: '1px solid #e7e0d5' }}
+        onMouseMove={handleMouseMove}
+        onMouseLeave={handleMouseLeave}
+      >
         <line x1={padding} y1={height - padding} x2={width - padding} y2={height - padding} stroke='#ccc' strokeWidth='1' />
         <line x1={padding} y1={padding} x2={padding} y2={height - padding} stroke='#ccc' strokeWidth='1' />
         {[0, 0.25, 0.5, 0.75, 1].map(p => (
@@ -3719,7 +3945,46 @@ function LineChart({ data, years, colors }: any) {
             <polyline key={name} fill='none' stroke={colors[i % colors.length]} strokeWidth='3' strokeLinejoin='round' strokeLinecap='round' points={points} />
           );
         })}
+
+        {hoveredData && (
+          // Render a vertical line at the hovered X position
+          <line
+            x1={getX(hoveredData.year)}
+            y1={padding}
+            x2={getX(hoveredData.year)}
+            y2={height - padding}
+            stroke='#888'
+            strokeDasharray='3 3'
+            strokeWidth='1'
+          />
+        )}
       </svg>
+
+      {hoveredData && hoveredCoords && (
+        <div
+          className='chart-tooltip'
+          style={{
+            position: 'absolute',
+            left: hoveredCoords.x + 10, // Offset from mouse
+            top: hoveredCoords.y - 10,  // Offset from mouse
+            background: 'white',
+            border: '1px solid #ccc',
+            padding: '8px',
+            borderRadius: '4px',
+            pointerEvents: 'none', // Allow mouse events to pass through
+            zIndex: 1000,
+            fontSize: '0.75rem',
+            boxShadow: '0 2px 5px rgba(0,0,0,0.2)'
+          }}
+        >
+          <div><strong>Year:</strong> {hoveredData.year} (+{hoveredData.year}y)</div>
+          <div><strong>Age:</strong> {hoveredData.age.toFixed(1)}</div>
+          {hoveredData.buckets.map((b: any) => (
+            <div key={b.label}><strong>{b.label}:</strong> {money.format(b.value)}</div>
+          ))}
+        </div>
+      )}
+
       <div className='chart-legend' style={{ display: 'flex', flexWrap: 'wrap', gap: '12px', marginTop: '14px', justifyContent: 'center' }}>
         {bucketNames.map((name: string, i: number) => (
           <div key={name} style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
