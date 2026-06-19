@@ -37,6 +37,8 @@ import {
   calculateNationalInsurance,
   calculateMortgage,
   calculateCoastFire,
+  calculateFullFire,
+  calculatePVBridge,
   calculateMortgageUpdate,
   calculateTaxSummary,
   clampNumber,
@@ -59,6 +61,8 @@ import {
   calculateGrowthSinceLastUpdate,
   getPendingMonthlyContributions,
   generateSavingsCSV,
+  generatePotGrowthTable,
+  PotGrowthRow,
 } from "./calculations";
 import "./styles.css";
 
@@ -197,6 +201,7 @@ type Plan = {
     showCoastFireCard?: boolean;
     swr?: number;
     realGrowth?: number;
+    firePassiveIncome?: number;
   };
 };
 
@@ -299,9 +304,10 @@ function App() {
   const [includeStatePension, setIncludeStatePension] = useState(true);
   const [showMortgageCard, setShowMortgageCard] = useState(true);
   const [showAssetsCard, setShowAssetsCard] = useState(true);
-  const [showCoastFireCard, setShowCoastFireCard] = useState(false);
+  const [showCoastFireCard, setShowCoastFireCard] = useState(true);
   const [swr, setSwr] = useState(4);
   const [realGrowth, setRealGrowth] = useState(3);
+  const [firePassiveIncome, setFirePassiveIncome] = useState(0);
 
   const [pendingContributions, setPendingContributions] = useState<{bucketId: string, count: number, totalAmount: number}[]>([]);
   const [pendingMortgageUpdate, setPendingMortgageUpdate] = useState<{months: number, newBalance: number, payments: number} | null>(null);
@@ -610,9 +616,10 @@ function App() {
     setIncludeStatePension(d.includeStatePension ?? true);
     setShowMortgageCard(d.showMortgageCard ?? true);
     setShowAssetsCard(d.showAssetsCard ?? true);
-    setShowCoastFireCard(d.showCoastFireCard ?? false);
+    setShowCoastFireCard(d.showCoastFireCard ?? true);
     setSwr(d.swr ?? 4);
     setRealGrowth(d.realGrowth ?? 3);
+    setFirePassiveIncome(d.firePassiveIncome ?? 0);
     
     // Normalize and set lastSavedData
     setLastSavedData(JSON.stringify({
@@ -636,9 +643,10 @@ function App() {
       showLisaUnder60: d.showLisaUnder60 ?? true,
       includeStatePension: d.includeStatePension ?? true,
       showMortgageCard: d.showMortgageCard ?? true,
-      showCoastFireCard: d.showCoastFireCard ?? false,
+      showCoastFireCard: d.showCoastFireCard ?? true,
       swr: d.swr ?? 4,
       realGrowth: d.realGrowth ?? 3,
+      firePassiveIncome: d.firePassiveIncome ?? 0,
     }));
   };
 
@@ -668,6 +676,7 @@ function App() {
       showMortgageCard,
       showAssetsCard,
       showCoastFireCard,
+      firePassiveIncome,
     };
 
     if (currentPlanId) {
@@ -1290,6 +1299,9 @@ const projectionBuckets = useMemo(() => {
           annualAccessibleContribution={annualAccessibleContribution}
           annualLockedContribution={annualLockedContribution}
           taxSettings={taxSettings}
+          passiveIncome={firePassiveIncome}
+          setPassiveIncome={setFirePassiveIncome}
+          savings={savings}
         />
       ) : null}
 
@@ -1355,13 +1367,18 @@ function CoastFireSection({
   currentExpenses, 
   annualAccessibleContribution, 
   annualLockedContribution,
-  taxSettings
+  taxSettings,
+  passiveIncome,
+  setPassiveIncome,
+  savings
 }: any) {
+  const [showGrowthTable, setShowGrowthTable] = useState(false);
   const [swr, setSwr] = useState(4);
   const [realGrowth, setRealGrowth] = useState(3);
   const [targetType, setTargetType] = useState<"current" | "retirement">("current");
 
   const annualExpenses = targetType === "current" ? currentExpenses : retirementExpenses;
+  const netExpenses = Math.max(0, annualExpenses - passiveIncome);
   const annualContribution = annualAccessibleContribution + annualLockedContribution;
 
   const updatedResult = useMemo(() => calculateCoastFire(
@@ -1374,75 +1391,344 @@ function CoastFireSection({
     realGrowth,
     swr,
     annualAccessibleContribution,
-    annualLockedContribution
-  ), [currentAge, retirementAge, pensionAccessAge, currentAccessibleBalance, currentLockedBalance, annualExpenses, realGrowth, swr, annualAccessibleContribution, annualLockedContribution]);
+    annualLockedContribution,
+    passiveIncome
+  ), [currentAge, retirementAge, pensionAccessAge, currentAccessibleBalance, currentLockedBalance, annualExpenses, realGrowth, swr, annualAccessibleContribution, annualLockedContribution, passiveIncome]);
+
+  const fullFireResult = useMemo(() => calculateFullFire(
+    currentAge,
+    pensionAccessAge,
+    currentAccessibleBalance,
+    currentLockedBalance,
+    annualExpenses,
+    realGrowth,
+    swr,
+    annualAccessibleContribution,
+    annualLockedContribution,
+    passiveIncome
+  ), [currentAge, pensionAccessAge, currentAccessibleBalance, currentLockedBalance, annualExpenses, realGrowth, swr, annualAccessibleContribution, annualLockedContribution, passiveIncome]);
 
   const grossSalaryRequired = useMemo(() => requiredGrossForNet(
-    annualExpenses / 12,
+    netExpenses / 12,
     taxSettings.taxCode,
     taxSettings.region,
     taxSettings.includeStudentLoan,
     taxSettings.pensionRate
-  ), [annualExpenses, taxSettings]);
+  ), [netExpenses, taxSettings]);
+
+  const currentTotalWealth = currentAccessibleBalance + currentLockedBalance;
+  
+  // Coast progress percentage
+  const coastProgressPercent = updatedResult.requiredCurrentBalance > 0
+    ? Math.min(100, Math.max(0, (currentTotalWealth / updatedResult.requiredCurrentBalance) * 100))
+    : 0;
+
+  // Full progress percentage (at current age, how close to retiring today)
+  const targetPotAtCurrentAge = calculatePVBridge(netExpenses, realGrowth, Math.max(0, pensionAccessAge - currentAge)) + (netExpenses / (swr / 100)) / Math.pow(1 + realGrowth / 100, Math.max(0, pensionAccessAge - currentAge));
+  const fullProgressPercent = targetPotAtCurrentAge > 0
+    ? Math.min(100, Math.max(0, (currentTotalWealth / targetPotAtCurrentAge) * 100))
+    : 0;
+
+  // Pot growth table: project existing pots with no new contributions from today to FIRE age (or up to 80 if not found)
+  const tableEndAge = fullFireResult.fullFireAge > 0 ? Math.max(fullFireResult.fullFireAge + 5, retirementAge + 5) : Math.min(retirementAge + 20, 80);
+  const potGrowthTable = useMemo(() => generatePotGrowthTable(
+    savings || [],
+    currentAge,
+    tableEndAge,
+    realGrowth,
+    pensionAccessAge
+  ), [savings, currentAge, tableEndAge, realGrowth, pensionAccessAge]);
+
+  // Find accessible pot and withdrawal at FIRE age
+  const fireAgeRow = fullFireResult.fullFireAge > 0
+    ? potGrowthTable.find(r => r.age === Math.floor(fullFireResult.fullFireAge))
+    : null;
+  const accessibleAtFireAge = fireAgeRow ? fireAgeRow.accessible : 0;
+  const annualWithdrawalFromAccessible = accessibleAtFireAge * (swr / 100);
 
   return (
     <div className="workspace">
       <section className="panel span-12">
-        <div className="split-title">
-          <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
-            <h2 style={{ margin: 0 }}>Coast FIRE Explorer</h2>
-            <div className="button-group" style={{ background: '#f1f5f9', padding: '4px', borderRadius: '8px' }}>
+        {/* Header and Inputs */}
+        <div className="split-title" style={{ flexWrap: 'wrap', gap: '15px', marginBottom: '25px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '15px', flexWrap: 'wrap' }}>
+            <h2 style={{ margin: 0, fontSize: '1.5rem', color: '#1e293b' }}>FIRE Explorer</h2>
+            <div className="button-group" style={{ background: '#f1f5f9', padding: '4px', borderRadius: '8px', display: 'inline-flex' }}>
               <button 
                 className={targetType === 'current' ? 'active' : 'secondary'} 
-                style={{ fontSize: '0.7rem', minHeight: '30px', padding: '0 10px' }}
+                style={{ fontSize: '0.75rem', minHeight: '30px', padding: '0 12px', border: 'none', cursor: 'pointer', borderRadius: '6px' }}
                 onClick={() => setTargetType('current')}
               >
-                Current Lifestyle
+                Current Lifestyle ({money.format(currentExpenses)}/yr)
               </button>
               <button 
                 className={targetType === 'retirement' ? 'active' : 'secondary'} 
-                style={{ fontSize: '0.7rem', minHeight: '30px', padding: '0 10px' }}
+                style={{ fontSize: '0.75rem', minHeight: '30px', padding: '0 12px', border: 'none', cursor: 'pointer', borderRadius: '6px' }}
                 onClick={() => setTargetType('retirement')}
               >
-                Retirement Budget
+                Retirement Budget ({money.format(retirementExpenses)}/yr)
               </button>
             </div>
           </div>
-          <div style={{ display: "flex", gap: "20px" }}>
-            <label style={{ fontSize: '0.8rem' }}>
-              Real Growth %
+          <div style={{ display: "flex", gap: "20px", flexWrap: 'wrap', alignItems: 'center' }}>
+            <label style={{ fontSize: '0.8rem', display: 'flex', flexDirection: 'column', gap: '4px', fontWeight: 600, color: '#475569' }}>
+              Annual Passive Income
+              <NumberInput value={passiveIncome} onChange={setPassiveIncome} suffix="/yr" />
+            </label>
+            <label style={{ fontSize: '0.8rem', display: 'flex', flexDirection: 'column', gap: '4px', fontWeight: 600, color: '#475569' }}>
+              Real Growth Rate %
               <NumberInput value={realGrowth} onChange={setRealGrowth} suffix="%" />
             </label>
-            <label style={{ fontSize: '0.8rem' }}>
-              SWR %
+            <label style={{ fontSize: '0.8rem', display: 'flex', flexDirection: 'column', gap: '4px', fontWeight: 600, color: '#475569' }}>
+              Safe Withdrawal Rate (SWR) %
               <NumberInput value={swr} onChange={setSwr} suffix="%" />
             </label>
           </div>
         </div>
 
+        {/* Dashboard Grid */}
         <div style={{ 
-          background: updatedResult.isCoastFire ? 'linear-gradient(135deg, #f0fff4 0%, #dcfce7 100%)' : 'linear-gradient(135deg, #fffcf3 0%, #fef9c3 100%)',
-          padding: '30px',
-          borderRadius: '12px',
-          textAlign: 'center',
-          marginBottom: '20px',
-          border: updatedResult.isCoastFire ? '1px solid #86efac' : '1px solid #fde047'
+          display: 'grid', 
+          gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', 
+          gap: '24px', 
+          marginBottom: '25px' 
         }}>
-          <span style={{ fontSize: '0.9rem', color: '#666', textTransform: 'uppercase', letterSpacing: '1px' }}>
-            {updatedResult.isCoastFire ? "Coast Status: Reached" : (updatedResult.coastFireAge === -1 ? "Coast Status: Not Achievable" : "Estimated Coast FIRE Age")}
-          </span>
-          <h1 style={{ fontSize: '3rem', margin: '10px 0', color: updatedResult.isCoastFire ? '#166534' : '#854d0e' }}>
-            {updatedResult.isCoastFire ? "REACHED!" : (updatedResult.coastFireAge === -1 ? "NOT REACHED" : `Age ${Math.floor(updatedResult.coastFireAge)}`)}
-          </h1>
-          <p style={{ fontSize: '1.1rem', maxWidth: '600px', margin: '0 auto', color: '#4b5563' }}>
-            {updatedResult.isCoastFire 
-              ? "Your current pots are already large enough (and accessible enough) to fund your retirement through growth alone. You could stop contributing today!"
-              : (updatedResult.coastFireAge === -1 
-                ? `Even if you keep contributing ${money.format(annualContribution)}/yr, you won't reach Coast FIRE by your chosen retirement age of ${retirementAge.toFixed(0)}.`
-                : `If you keep contributing ${money.format(annualContribution)}/yr, you will reach Coast FIRE at age ${Math.floor(updatedResult.coastFireAge)}. From that point, your pots will grow and bridge yourself comfortably at ${retirementAge.toFixed(0)}.`)}
-          </p>
+          {/* Card 1: Coast FIRE Card */}
+          <div style={{ 
+            background: updatedResult.isCoastFire ? 'linear-gradient(135deg, #f0fff4 0%, #e0f9e8 100%)' : 'linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%)',
+            padding: '24px',
+            borderRadius: '12px',
+            border: updatedResult.isCoastFire ? '1px solid #86efac' : '1px solid #fde047',
+            boxShadow: '0 4px 15px rgba(0,0,0,0.05)',
+            display: 'flex',
+            flexDirection: 'column',
+            justifyContent: 'space-between'
+          }}>
+            <div>
+              <span style={{ fontSize: '0.8rem', color: '#64748b', textTransform: 'uppercase', letterSpacing: '1px', fontWeight: 700 }}>
+                {updatedResult.isCoastFire ? "Coast Status: Reached" : (updatedResult.coastFireAge === -1 ? "Coast Status: Not Achievable" : "Estimated Coast FIRE Age")}
+              </span>
+              <h3 style={{ fontSize: '2.5rem', margin: '8px 0', color: updatedResult.isCoastFire ? '#166534' : '#92400e', fontWeight: 800 }}>
+                {updatedResult.isCoastFire ? "REACHED!" : (updatedResult.coastFireAge === -1 ? "NOT REACHED" : `Age ${Math.floor(updatedResult.coastFireAge)}`)}
+              </h3>
+              
+              {/* Progress indicator */}
+              <div style={{ margin: '15px 0' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', color: '#475569', marginBottom: '4px', fontWeight: 600 }}>
+                  <span>Coast Progress (Today)</span>
+                  <span>{coastProgressPercent.toFixed(0)}%</span>
+                </div>
+                <div style={{ width: '100%', height: '8px', background: 'rgba(0,0,0,0.06)', borderRadius: '4px', overflow: 'hidden' }}>
+                  <div style={{ width: `${coastProgressPercent}%`, height: '100%', background: updatedResult.isCoastFire ? '#22c55e' : '#eab308', borderRadius: '4px', transition: 'width 0.5s ease-out' }}></div>
+                </div>
+              </div>
+
+              <p style={{ fontSize: '0.95rem', color: '#334155', lineHeight: '1.5', margin: '15px 0' }}>
+                {updatedResult.isCoastFire 
+                  ? `Your current savings of ${money.format(currentTotalWealth)} are large enough to fund your retirement through growth alone. You could stop contributing today!`
+                  : (updatedResult.coastFireAge === -1 
+                    ? `Even if you keep contributing ${money.format(annualContribution)}/yr, you won't reach Coast FIRE by retirement age ${retirementAge.toFixed(0)}.`
+                    : `If you keep contributing ${money.format(annualContribution)}/yr, you will reach Coast FIRE at age ${Math.floor(updatedResult.coastFireAge)}. From that point, you don't need to save another penny for retirement.`)}
+              </p>
+            </div>
+
+            <div style={{ borderTop: '1px solid rgba(0,0,0,0.08)', paddingTop: '15px', marginTop: '10px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', margin: '6px 0', fontSize: '0.9rem' }}>
+                <span style={{ color: '#475569' }}>Coast FIRE Number Today:</span>
+                <strong style={{ color: '#1e293b' }}>{money.format(updatedResult.requiredCurrentBalance)}</strong>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', margin: '6px 0', fontSize: '0.9rem' }}>
+                <span style={{ color: '#475569' }}>Current Savings Pot:</span>
+                <strong style={{ color: '#1e293b' }}>{money.format(currentTotalWealth)}</strong>
+              </div>
+              {updatedResult.currentCoastGap > 0 && (
+                <div style={{ display: 'flex', justifyContent: 'space-between', margin: '6px 0', fontSize: '0.9rem' }}>
+                  <span style={{ color: '#991b1b' }}>Coast Gap Today:</span>
+                  <strong style={{ color: '#b91c1c' }}>{money.format(updatedResult.currentCoastGap)}</strong>
+                </div>
+              )}
+              {updatedResult.coastFireAge !== -1 && !updatedResult.isCoastFire && (
+                <div style={{ display: 'flex', justifyContent: 'space-between', margin: '6px 0', fontSize: '0.9rem' }}>
+                  <span style={{ color: '#475569' }}>Target Pot at Coast Age:</span>
+                  <strong style={{ color: '#1e293b' }}>{money.format(updatedResult.coastFirePotAtAge)}</strong>
+                </div>
+              )}
+              <div style={{ display: 'flex', justifyContent: 'space-between', margin: '6px 0', fontSize: '0.9rem' }}>
+                <span style={{ color: '#475569' }}>Projected Pot at Retirement:</span>
+                <strong style={{ color: '#1e293b' }}>{money.format(updatedResult.projectedPotAtRetirement)}</strong>
+              </div>
+            </div>
+          </div>
+
+          {/* Card 2: Full FIRE Card */}
+          <div style={{ 
+            background: fullFireResult.isFullFire ? 'linear-gradient(135deg, #ecfeff 0%, #cffafe 100%)' : 'linear-gradient(135deg, #f5f3ff 0%, #e0e7ff 100%)',
+            padding: '24px',
+            borderRadius: '12px',
+            border: fullFireResult.isFullFire ? '1px solid #67e8f9' : '1px solid #c7d2fe',
+            boxShadow: '0 4px 15px rgba(0,0,0,0.05)',
+            display: 'flex',
+            flexDirection: 'column',
+            justifyContent: 'space-between'
+          }}>
+            <div>
+              <span style={{ fontSize: '0.8rem', color: '#64748b', textTransform: 'uppercase', letterSpacing: '1px', fontWeight: 700 }}>
+                {fullFireResult.isFullFire ? "FIRE Status: Fully Achieved" : (fullFireResult.fullFireAge === -1 ? "FIRE Status: Not Achievable" : "Estimated Full FIRE Age")}
+              </span>
+              <h3 style={{ fontSize: '2.5rem', margin: '8px 0', color: fullFireResult.isFullFire ? '#083344' : '#3730a3', fontWeight: 800 }}>
+                {fullFireResult.isFullFire ? "REACHED!" : (fullFireResult.fullFireAge === -1 ? "NOT REACHED" : `Age ${Math.floor(fullFireResult.fullFireAge)}`)}
+              </h3>
+
+              {/* Progress indicator */}
+              <div style={{ margin: '15px 0' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', color: '#475569', marginBottom: '4px', fontWeight: 600 }}>
+                  <span>Full FIRE Progress (Today)</span>
+                  <span>{fullProgressPercent.toFixed(0)}%</span>
+                </div>
+                <div style={{ width: '100%', height: '8px', background: 'rgba(0,0,0,0.06)', borderRadius: '4px', overflow: 'hidden' }}>
+                  <div style={{ width: `${fullProgressPercent}%`, height: '100%', background: fullFireResult.isFullFire ? '#06b6d4' : '#6366f1', borderRadius: '4px', transition: 'width 0.5s ease-out' }}></div>
+                </div>
+              </div>
+
+              <p style={{ fontSize: '0.95rem', color: '#334155', lineHeight: '1.5', margin: '15px 0' }}>
+                {fullFireResult.isFullFire 
+                  ? "Congratulations! Your current savings are fully sufficient to cover all your expenses indefinitely. You do not need to save or work another day."
+                  : (fullFireResult.fullFireAge === -1 
+                    ? `With your current savings rate, your pots won't grow large enough to achieve Full FIRE (retirement at that age) before age 100.`
+                    : `By age ${Math.floor(fullFireResult.fullFireAge)}, if you keep contributing ${money.format(annualContribution)}/yr, your investments will be fully sufficient. You can retire completely at that age.`)}
+              </p>
+            </div>
+
+            <div style={{ borderTop: '1px solid rgba(0,0,0,0.08)', paddingTop: '15px', marginTop: '10px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', margin: '6px 0', fontSize: '0.9rem' }}>
+                <span style={{ color: '#475569' }}>Target Pot Needed for FIRE:</span>
+                <strong style={{ color: '#1e293b' }}>
+                  {fullFireResult.isFullFire 
+                    ? money.format(targetPotAtCurrentAge) 
+                    : (fullFireResult.fullFireAge === -1 ? 'N/A' : money.format(fullFireResult.targetPotAtFullFireAge))}
+                </strong>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', margin: '6px 0', fontSize: '0.9rem' }}>
+                <span style={{ color: '#475569' }}>Projected Pot at FIRE Age:</span>
+                <strong style={{ color: '#1e293b' }}>
+                  {fullFireResult.isFullFire 
+                    ? money.format(currentTotalWealth) 
+                    : (fullFireResult.fullFireAge === -1 ? 'N/A' : money.format(fullFireResult.fullFirePotAtAge))}
+                </strong>
+              </div>
+              {fullFireResult.fullFireAge > 0 && fireAgeRow && (
+                <>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', margin: '6px 0', fontSize: '0.9rem' }}>
+                    <span style={{ color: '#475569' }}>Accessible Pot at FIRE Age (no contributions):</span>
+                    <strong style={{ color: '#1e293b' }}>{money.format(accessibleAtFireAge)}</strong>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', margin: '6px 0', fontSize: '0.9rem' }}>
+                    <span style={{ color: '#475569' }}>Annual Withdrawal from Accessible ({swr}% SWR):</span>
+                    <strong style={{ color: '#1e293b' }}>{money.format(annualWithdrawalFromAccessible)}</strong>
+                  </div>
+                </>
+              )}
+              <div style={{ display: 'flex', justifyContent: 'space-between', margin: '6px 0', fontSize: '0.9rem' }}>
+                <span style={{ color: '#475569' }}>Years to Full FIRE:</span>
+                <strong style={{ color: '#1e293b' }}>
+                  {fullFireResult.fullFireAge === -1 ? 'N/A' : `${fullFireResult.yearsToFullFire} years`}
+                </strong>
+              </div>
+
+              {/* Toggle pot growth table button */}
+              <button
+                onClick={() => setShowGrowthTable(t => !t)}
+                style={{
+                  marginTop: '12px',
+                  width: '100%',
+                  padding: '8px 16px',
+                  background: 'rgba(99,102,241,0.1)',
+                  border: '1px solid rgba(99,102,241,0.25)',
+                  borderRadius: '6px',
+                  color: '#3730a3',
+                  fontSize: '0.82rem',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '6px',
+                  transition: 'background 0.2s'
+                }}
+              >
+                {showGrowthTable ? '▲ Hide' : '▼ Show'} Pot Growth Projection (no contributions)
+              </button>
+            </div>
+          </div>
         </div>
 
+        {/* Pot Growth Projection Table */}
+        {showGrowthTable && (
+          <div style={{ marginBottom: '25px', overflowX: 'auto' }}>
+            <div style={{ padding: '16px 20px', background: '#f8fafc', borderRadius: '10px 10px 0 0', border: '1px solid #e2e8f0', borderBottom: 'none', display: 'flex', alignItems: 'center', gap: '12px' }}>
+              <span style={{ fontSize: '1.1rem' }}>📊</span>
+              <div>
+                <strong style={{ color: '#1e293b', fontSize: '0.95rem' }}>How your existing pots could grow in real terms if you stopped contributing today</strong>
+                <p style={{ margin: '2px 0 0', fontSize: '0.8rem', color: '#64748b' }}>
+                  Growth rate: {realGrowth}% real/yr · Pension accessible from age {pensionAccessAge} · Contributions: £0 (stopped today)
+                </p>
+              </div>
+            </div>
+            <div style={{ overflowX: 'auto', border: '1px solid #e2e8f0', borderRadius: '0 0 10px 10px' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.875rem', minWidth: '580px' }}>
+                <thead>
+                  <tr style={{ background: '#f1f5f9' }}>
+                    {['Age', 'Cash', 'ISA / LISA', 'GIA', 'Pension', 'Total'].map(h => (
+                      <th key={h} style={{ padding: '10px 14px', textAlign: 'right', fontWeight: 700, color: '#475569', fontSize: '0.78rem', textTransform: 'uppercase', letterSpacing: '0.5px', borderBottom: '1px solid #e2e8f0', whiteSpace: 'nowrap', ...(h === 'Age' ? { textAlign: 'left' } : {}) }}>
+                        {h}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {potGrowthTable.map((row, idx) => {
+                    const isFireAge = fullFireResult.fullFireAge > 0 && row.age === Math.floor(fullFireResult.fullFireAge);
+                    const isPensionUnlockAge = row.age === pensionAccessAge;
+                    const isRetirementAge = row.age === Math.floor(retirementAge);
+                    const isHighlighted = isFireAge || isPensionUnlockAge || isRetirementAge;
+                    const rowBg = isFireAge ? '#f0fdf4' : (isPensionUnlockAge ? '#eff6ff' : (isRetirementAge ? '#fefce8' : (idx % 2 === 0 ? '#fff' : '#fafafa')));
+                    return (
+                      <tr key={row.age} style={{ background: rowBg, borderBottom: '1px solid #f1f5f9' }}>
+                        <td style={{ padding: '9px 14px', fontWeight: isHighlighted ? 700 : 500, color: isFireAge ? '#166534' : (isPensionUnlockAge ? '#1e40af' : (isRetirementAge ? '#92400e' : '#334155')), whiteSpace: 'nowrap' }}>
+                          {row.age}
+                          {isFireAge && <span style={{ marginLeft: '6px', fontSize: '0.7rem', background: '#bbf7d0', color: '#166534', padding: '1px 5px', borderRadius: '4px', fontWeight: 700 }}>FIRE</span>}
+                          {isPensionUnlockAge && !isFireAge && <span style={{ marginLeft: '6px', fontSize: '0.7rem', background: '#dbeafe', color: '#1e40af', padding: '1px 5px', borderRadius: '4px', fontWeight: 700 }}>Pension Unlocks</span>}
+                          {isRetirementAge && !isFireAge && !isPensionUnlockAge && <span style={{ marginLeft: '6px', fontSize: '0.7rem', background: '#fef08a', color: '#854d0e', padding: '1px 5px', borderRadius: '4px', fontWeight: 700 }}>Target Retire</span>}
+                        </td>
+                        <td style={{ padding: '9px 14px', textAlign: 'right', color: '#334155', fontWeight: isHighlighted ? 600 : 400 }}>
+                          {row.cash > 0 ? money.format(row.cash) : <span style={{ color: '#cbd5e1' }}>—</span>}
+                        </td>
+                        <td style={{ padding: '9px 14px', textAlign: 'right', color: '#334155', fontWeight: isHighlighted ? 600 : 400 }}>
+                          {row.isa > 0 ? money.format(row.isa) : <span style={{ color: '#cbd5e1' }}>—</span>}
+                        </td>
+                        <td style={{ padding: '9px 14px', textAlign: 'right', color: '#334155', fontWeight: isHighlighted ? 600 : 400 }}>
+                          {row.gia > 0 ? money.format(row.gia) : <span style={{ color: '#cbd5e1' }}>—</span>}
+                        </td>
+                        <td style={{ padding: '9px 14px', textAlign: 'right', color: row.age < pensionAccessAge ? '#94a3b8' : '#334155', fontStyle: row.age < pensionAccessAge ? 'italic' : 'normal', fontWeight: isHighlighted ? 600 : 400 }}>
+                          {row.pension > 0 ? money.format(row.pension) : <span style={{ color: '#cbd5e1' }}>—</span>}
+                          {row.age < pensionAccessAge && row.pension > 0 && <span style={{ fontSize: '0.65rem', display: 'block', color: '#94a3b8' }}>locked</span>}
+                        </td>
+                        <td style={{ padding: '9px 14px', textAlign: 'right', fontWeight: isHighlighted ? 700 : 600, color: isFireAge ? '#166534' : '#1e293b' }}>
+                          {money.format(row.total)}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            <p style={{ fontSize: '0.75rem', color: '#94a3b8', marginTop: '8px', textAlign: 'center' }}>
+              📌 Pension values shown in grey/italic are locked until age {pensionAccessAge}. The "Total" column includes all pots regardless of accessibility.
+            </p>
+          </div>
+        )}
+
+        {/* Bridge warnings & information */}
         {retirementAge < pensionAccessAge && (
           <div style={{ 
             background: updatedResult.isBridgeFunded ? '#f0f9ff' : '#fff1f2', 
@@ -1457,34 +1743,37 @@ function CoastFireSection({
             <span style={{ fontSize: '1.5rem' }}>{updatedResult.isBridgeFunded ? '✅' : '⚠️'}</span>
             <div style={{ flex: 1 }}>
               <strong style={{ display: 'block', color: updatedResult.isBridgeFunded ? '#0369a1' : '#9f1239' }}>
-                Bridge Requirement: {money.format(updatedResult.bridgeRequired)}
+                Early Retirement Bridge: {money.format(updatedResult.bridgeRequired)} required in accessible accounts
               </strong>
               <small style={{ color: '#64748b' }}>
-                You want to retire at age {retirementAge.toFixed(0)}, but your pensions are locked until age {pensionAccessAge}. 
+                You want to retire at age {retirementAge.toFixed(0)}, but your pension pots are locked until age {pensionAccessAge}. 
                 {updatedResult.isBridgeFunded 
-                  ? " Your ISA/Cash pots are projected to be large enough to cover this gap."
-                  : " Your ISA/Cash pots are currently too small to bridge this gap. You'll need more accessible savings."}
+                  ? ` Your ISA/Cash pots (currently ${money.format(currentAccessibleBalance)}) are projected to grow to at least ${money.format(updatedResult.bridgeRequired)} by retirement age, which is sufficient to cover your expenses during the bridge years.`
+                  : ` Your ISA/Cash pots (currently ${money.format(currentAccessibleBalance)}) are too small and are projected to fall short. To retire at ${retirementAge.toFixed(0)}, you will need to allocate more contributions to accessible accounts like ISAs or Cash.`}
               </small>
             </div>
           </div>
         )}
 
+        {/* Key Metrics Grid */}
         <div className="summary-grid">
-          <Metric label="Target Pot (Retirement)" value={money.format(updatedResult.targetPotAtRetirement)} detail={`to cover ${money.format(annualExpenses)}/yr`} />
-          <Metric label="Milestone: Pot at Coast Age" value={money.format(updatedResult.coastFirePotAtAge)} detail={`projected balance at age ${updatedResult.coastFireAge === -1 ? 'N/A' : Math.floor(updatedResult.coastFireAge)}`} />
-          <Metric label="Coasting Gross Salary" value={money.format(grossSalaryRequired)} detail="Gross needed to cover net lifestyle" />
+          <Metric label="Long Term Target Pot" value={money.format(updatedResult.targetPotAtRetirement)} detail={`to cover net expenses of ${money.format(netExpenses)}/yr (passive deducted)`} />
+          <Metric label="Total Annual Contributions" value={money.format(annualContribution)} detail={`Accessible: ${money.format(annualAccessibleContribution)}/yr, Locked: ${money.format(annualLockedContribution)}/yr`} />
+          <Metric label="Net Expenses Covered" value={money.format(netExpenses)} detail={`Total target: ${money.format(annualExpenses)}/yr less passive: ${money.format(passiveIncome)}/yr`} />
+          <Metric label="Equivalent Coasting Gross" value={money.format(grossSalaryRequired)} detail="Gross salary needed to cover net lifestyle shortage" />
         </div>
 
+        {/* Smart Bridge Awareness Details */}
         <div style={{ marginTop: '30px', padding: '20px', background: '#f8fafc', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
-          <h3 style={{ marginTop: 0 }}>Smart Bridge Awareness</h3>
+          <h3 style={{ marginTop: 0 }}>Smart Access &amp; Bridge Awareness</h3>
           <p style={{ fontSize: '0.9rem', color: '#64748b', lineHeight: '1.6' }}>
-            This calculator is <strong>Access-Aware</strong>. Because you want to retire at {retirementAge.toFixed(0)}, which is before your pension access age ({pensionAccessAge}), it calculates two things:
+            This calculator is <strong>Access-Aware</strong>. Early retirement (before your Pension Access Age of {pensionAccessAge}) requires separating your wealth into two phases:
             <br/><br/>
-            1. <strong>The Bridge:</strong> Do you have enough in accessible accounts (ISAs/Cash) to pay your bills until your pension unlocks?
+            1. <strong>The Bridge Phase (Retirement Age to {pensionAccessAge}):</strong> Since pensions cannot be touched, you must live off accessible accounts (ISAs and Cash). We calculate the present value of this bridge, allowing your leftover accessible money to grow during this period.
             <br/>
-            2. <strong>The Long Term:</strong> Do you have enough total wealth to sustain a {swr}% withdrawal rate for the rest of your life?
+            2. <strong>The Long-Term Phase ({pensionAccessAge} onwards):</strong> Once your pensions unlock, your combined total pots (Pensions + remaining Accessible pots) must be large enough to support you forever under a {swr}% safe withdrawal rate.
             <br/><br/>
-            <strong>Your Coasting Income:</strong> Once you reach Coast FIRE (Age {updatedResult.coastFireAge === -1 ? "N/A" : Math.floor(updatedResult.coastFireAge)}), you technically don't need to save for retirement anymore. This means you only need to earn enough to cover your current annual expenses of {money.format(annualExpenses)}/year.
+            <strong>Your Coasting Income:</strong> Once you reach Coast FIRE (Age {updatedResult.coastFireAge === -1 ? "N/A" : Math.floor(updatedResult.coastFireAge)}), you no longer need to save for retirement. You only need to earn enough from work to cover your remaining net living expenses: <strong>{money.format(netExpenses)}/year net</strong> (equivalent to <strong>{money.format(grossSalaryRequired)}/year gross</strong>) in addition to your passive income of <strong>{money.format(passiveIncome)}/year</strong>.
           </p>
         </div>
       </section>

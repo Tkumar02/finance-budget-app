@@ -688,11 +688,22 @@ export function calculateMortgageUpdate(mortgage: MortgageInputs, today: Date = 
   return { newBalance: balance, interestAccrued, paymentsMade, monthsElapsed };
 }
 
+export function calculatePVBridge(annualExpenses: number, realGrowthRate: number, bridgeYears: number): number {
+  if (bridgeYears <= 0) return 0;
+  const growthFactor = 1 + (realGrowthRate / 100);
+  let pv = 0;
+  for (let i = 0; i < bridgeYears; i++) {
+    pv += annualExpenses / Math.pow(growthFactor, i);
+  }
+  return pv;
+}
+
 export type CoastFireResult = {
   coastFireAge: number;
   isCoastFire: boolean;
   targetPotAtRetirement: number;
   requiredCurrentBalance: number;
+  requiredCurrentAccessible: number;
   currentCoastGap: number;
   projectedPotAtRetirement: number;
   yearsToCoast: number;
@@ -711,17 +722,19 @@ export function calculateCoastFire(
   realGrowthRate: number,
   swr: number = 4,
   annualAccessibleContribution: number = 0,
-  annualLockedContribution: number = 0
+  annualLockedContribution: number = 0,
+  passiveIncome: number = 0
 ): CoastFireResult {
-  const targetPot = annualExpenses / (swr / 100);
+  const netExpenses = Math.max(0, annualExpenses - passiveIncome);
   const growthFactor = 1 + (realGrowthRate / 100);
   const bridgeYears = Math.max(0, pensionAccessAge - retirementAge);
-  const bridgeCostAtRetirement = annualExpenses * bridgeYears;
+  const bridgeCostAtRetirement = calculatePVBridge(netExpenses, realGrowthRate, bridgeYears);
+  const targetPot = netExpenses / (swr / 100);
   
   function checkStatus(acc: number, lock: number, age: number) {
     const yearsToRetire = Math.max(0, retirementAge - age);
     
-    // Project current pots to retirementAge
+    // Project current pots to retirementAge (with growth alone, zero contributions)
     const accAtRetire = acc * Math.pow(growthFactor, yearsToRetire);
     const lockAtRetire = lock * Math.pow(growthFactor, yearsToRetire);
     
@@ -741,43 +754,238 @@ export function calculateCoastFire(
   
   let coastFireAge = -1;
   let coastFirePotAtAge = 0;
+  let projectedPotAtRetirement = 0;
   
+  // We'll track the pots year by year to simulate contributions
+  let tempAcc = currentAccessibleBalance;
+  let tempLock = currentLockedBalance;
+  const nextIntegerAge = Math.ceil(currentAge);
+  const firstYearFraction = nextIntegerAge - currentAge;
+
   if (statusToday.isFunded) {
     coastFireAge = currentAge;
     coastFirePotAtAge = currentAccessibleBalance + currentLockedBalance;
+    projectedPotAtRetirement = (currentAccessibleBalance + currentLockedBalance) * Math.pow(growthFactor, Math.max(0, retirementAge - currentAge));
   } else {
     // Simulate year by year to find the earliest Coast Age
-    let tempAcc = currentAccessibleBalance;
-    let tempLock = currentLockedBalance;
+    // 1st step: grow to next integer age
+    if (firstYearFraction > 0) {
+      const firstYearGrowthFactor = Math.pow(growthFactor, firstYearFraction);
+      tempAcc = (tempAcc * firstYearGrowthFactor) + (annualAccessibleContribution * firstYearFraction);
+      tempLock = (tempLock * firstYearGrowthFactor) + (annualLockedContribution * firstYearFraction);
+      
+      const status = checkStatus(tempAcc, tempLock, nextIntegerAge);
+      if (status.isFunded) {
+        coastFireAge = nextIntegerAge;
+        coastFirePotAtAge = tempAcc + tempLock;
+      }
+    }
     
-    for (let age = Math.floor(currentAge); age < retirementAge; age++) {
-      // End of year contribution and growth
+    if (coastFireAge === -1) {
+      for (let age = nextIntegerAge; age < retirementAge; age++) {
+        tempAcc = (tempAcc * growthFactor) + annualAccessibleContribution;
+        tempLock = (tempLock * growthFactor) + annualLockedContribution;
+
+        const status = checkStatus(tempAcc, tempLock, age + 1);
+        if (status.isFunded) {
+          coastFireAge = age + 1;
+          coastFirePotAtAge = tempAcc + tempLock;
+          break;
+        }
+      }
+    }
+    
+    // Calculate projectedPotAtRetirement based on Coast FIRE status
+    if (coastFireAge !== -1) {
+      const yearsRemaining = Math.max(0, retirementAge - coastFireAge);
+      // Growth only (no contributions) from coast age to retirement age
+      projectedPotAtRetirement = (tempAcc + tempLock) * Math.pow(growthFactor, yearsRemaining);
+    } else {
+      // Never reached Coast FIRE by retirement age, so we kept contributing all the way
+      projectedPotAtRetirement = tempAcc + tempLock;
+    }
+  }
+
+  const yearsToRetirement = Math.max(0, retirementAge - currentAge);
+  
+  // Coast FIRE Number (Required balance today)
+  // Required accessible today = PV_bridge / growth to retirement
+  const requiredCurrentAccessible = bridgeCostAtRetirement / Math.pow(growthFactor, yearsToRetirement);
+  // Required total today = (PV_bridge + targetPot / growth during bridge) / growth to retirement
+  const requiredCurrentBalance = (bridgeCostAtRetirement + (targetPot / Math.pow(growthFactor, bridgeYears))) / Math.pow(growthFactor, yearsToRetirement);
+
+  return {
+    coastFireAge,
+    isCoastFire: statusToday.isFunded,
+    targetPotAtRetirement: targetPot,
+    requiredCurrentBalance,
+    requiredCurrentAccessible,
+    currentCoastGap: Math.max(0, requiredCurrentBalance - (currentAccessibleBalance + currentLockedBalance)),
+    projectedPotAtRetirement,
+    yearsToCoast: coastFireAge === -1 ? -1 : Math.max(0, Math.floor(coastFireAge - currentAge)),
+    bridgeRequired: bridgeCostAtRetirement,
+    isBridgeFunded: statusToday.canFundBridge,
+    coastFirePotAtAge
+  };
+}
+
+export type FullFireResult = {
+  fullFireAge: number;
+  isFullFire: boolean;
+  yearsToFullFire: number;
+  fullFirePotAtAge: number;
+  targetPotAtFullFireAge: number;
+};
+
+export function calculateFullFire(
+  currentAge: number,
+  pensionAccessAge: number,
+  currentAccessibleBalance: number,
+  currentLockedBalance: number,
+  annualExpenses: number,
+  realGrowthRate: number,
+  swr: number = 4,
+  annualAccessibleContribution: number = 0,
+  annualLockedContribution: number = 0,
+  passiveIncome: number = 0
+): FullFireResult {
+  const netExpenses = Math.max(0, annualExpenses - passiveIncome);
+  const growthFactor = 1 + (realGrowthRate / 100);
+  
+  function checkStatus(acc: number, lock: number, age: number) {
+    const bridgeYears = Math.max(0, pensionAccessAge - age);
+    const pvBridge = calculatePVBridge(netExpenses, realGrowthRate, bridgeYears);
+    const targetPot = netExpenses / (swr / 100);
+    
+    const canFundBridge = acc >= pvBridge;
+    const remainingAfterBridge = (acc - pvBridge) + lock;
+    const projectedAtAccess = remainingAfterBridge * Math.pow(growthFactor, bridgeYears);
+    
+    const isFunded = canFundBridge && projectedAtAccess >= targetPot;
+    const requiredTotal = pvBridge + (targetPot / Math.pow(growthFactor, bridgeYears));
+    
+    return { isFunded, requiredTotal };
+  }
+
+  const statusToday = checkStatus(currentAccessibleBalance, currentLockedBalance, currentAge);
+  if (statusToday.isFunded) {
+    return {
+      fullFireAge: currentAge,
+      isFullFire: true,
+      yearsToFullFire: 0,
+      fullFirePotAtAge: currentAccessibleBalance + currentLockedBalance,
+      targetPotAtFullFireAge: statusToday.requiredTotal
+    };
+  }
+
+  let tempAcc = currentAccessibleBalance;
+  let tempLock = currentLockedBalance;
+  let fullFireAge = -1;
+  let fullFirePotAtAge = 0;
+  let targetPotAtFullFireAge = 0;
+  
+  const nextIntegerAge = Math.ceil(currentAge);
+  const firstYearFraction = nextIntegerAge - currentAge;
+
+  if (firstYearFraction > 0) {
+    const firstYearGrowthFactor = Math.pow(growthFactor, firstYearFraction);
+    tempAcc = (tempAcc * firstYearGrowthFactor) + (annualAccessibleContribution * firstYearFraction);
+    tempLock = (tempLock * firstYearGrowthFactor) + (annualLockedContribution * firstYearFraction);
+    
+    const status = checkStatus(tempAcc, tempLock, nextIntegerAge);
+    if (status.isFunded) {
+      fullFireAge = nextIntegerAge;
+      fullFirePotAtAge = tempAcc + tempLock;
+      targetPotAtFullFireAge = status.requiredTotal;
+    }
+  }
+
+  if (fullFireAge === -1) {
+    for (let age = nextIntegerAge; age < 100; age++) {
       tempAcc = (tempAcc * growthFactor) + annualAccessibleContribution;
       tempLock = (tempLock * growthFactor) + annualLockedContribution;
-
+      
       const status = checkStatus(tempAcc, tempLock, age + 1);
       if (status.isFunded) {
-        coastFireAge = age + 1;
-        coastFirePotAtAge = tempAcc + tempLock;
+        fullFireAge = age + 1;
+        fullFirePotAtAge = tempAcc + tempLock;
+        targetPotAtFullFireAge = status.requiredTotal;
         break;
       }
     }
   }
 
-  const yearsToRetirement = Math.max(0, retirementAge - currentAge);
-
   return {
-    coastFireAge: coastFireAge, // -1 means not achieved
-    isCoastFire: statusToday.isFunded,
-    targetPotAtRetirement: targetPot,
-    requiredCurrentBalance: targetPot / Math.pow(growthFactor, yearsToRetirement + bridgeYears),
-    currentCoastGap: Math.max(0, (targetPot / Math.pow(growthFactor, yearsToRetirement + bridgeYears)) - (currentAccessibleBalance + currentLockedBalance)),
-    projectedPotAtRetirement: (currentAccessibleBalance + currentLockedBalance) * Math.pow(growthFactor, yearsToRetirement),
-    yearsToCoast: coastFireAge === -1 ? -1 : Math.max(0, Math.floor(coastFireAge - currentAge)),
-    bridgeRequired: bridgeCostAtRetirement,
-    isBridgeFunded: statusToday.canFundBridge,
-    coastFirePotAtAge: coastFirePotAtAge
+    fullFireAge,
+    isFullFire: false,
+    yearsToFullFire: fullFireAge === -1 ? -1 : Math.max(0, Math.floor(fullFireAge - currentAge)),
+    fullFirePotAtAge,
+    targetPotAtFullFireAge
   };
+}
+
+export type PotGrowthRow = {
+  age: number;
+  cash: number;
+  isa: number;
+  gia: number;
+  pension: number;
+  accessible: number;
+  total: number;
+};
+
+/**
+ * Projects each pot type year-by-year with NO new contributions (as-if you stopped contributing today).
+ * This gives the user a clear view of how existing pots grow over time.
+ */
+export function generatePotGrowthTable(
+  buckets: SavingsBucket[],
+  currentAge: number,
+  endAge: number,
+  realGrowthRate: number,
+  pensionAccessAge: number
+): PotGrowthRow[] {
+  const growthFactor = 1 + (realGrowthRate / 100);
+
+  // Aggregate starting balances by simplified bucket type
+  let cashBalance = 0;
+  let isaBalance = 0;
+  let giaBalance = 0;
+  let pensionBalance = 0;
+
+  for (const b of buckets) {
+    const t = b.type.toLowerCase();
+    const bal = clampNumber(b.balance);
+    if (t === 'cash') {
+      cashBalance += bal;
+    } else if (t === 'isa' || t === 'lisa') {
+      isaBalance += bal;
+    } else if (t === 'gia') {
+      giaBalance += bal;
+    } else {
+      // All pension types
+      pensionBalance += bal;
+    }
+  }
+
+  const rows: PotGrowthRow[] = [];
+
+  for (let age = Math.ceil(currentAge); age <= endAge; age++) {
+    const yearsFromNow = age - currentAge;
+    const factor = Math.pow(growthFactor, yearsFromNow);
+
+    const cash = cashBalance * factor;
+    const isa = isaBalance * factor;
+    const gia = giaBalance * factor;
+    const pension = pensionBalance * factor;
+    const total = cash + isa + gia + pension;
+    // Accessible = cash + ISA + GIA, pension only accessible from pensionAccessAge
+    const accessible = cash + isa + gia + (age >= pensionAccessAge ? pension : 0);
+
+    rows.push({ age, cash, isa, gia, pension, accessible, total });
+  }
+
+  return rows;
 }
 
 export type FinancialSnapshot = {
