@@ -8,6 +8,7 @@
     "@genkit-ai/ai": "^1.34.0",
     "@genkit-ai/flow": "^0.5.17",
     "@genkit-ai/google-genai": "^1.34.0",
+    "@google/genai": "^2.10.0",
     "@vitejs/plugin-react": "^5.0.0",
     "firebase": "^12.13.0",
     "genkit": "^1.34.0",

@@ -932,18 +932,33 @@ export type PotGrowthRow = {
   pension: number;
   accessible: number;
   total: number;
+  phase: 'accumulation' | 'coasting' | 'drawdown';
+  // Withdrawal columns (non-zero only during drawdown phase)
+  withdrawalAccessible: number;  // Amount drawn from ISA/Cash/GIA this year
+  withdrawalPension: number;     // Amount drawn from pension pots this year
+  totalWithdrawal: number;
+  isShortfall: boolean;          // True if pots cannot cover required withdrawal
 };
 
 /**
- * Projects each pot type year-by-year with NO new contributions (as-if you stopped contributing today).
- * This gives the user a clear view of how existing pots grow over time.
+ * Projects each pot type year-by-year.
+ * - Accumulation phase (age < coastFireAge): pots grow WITH contributions
+ * - Coasting phase (coastFireAge <= age < retirementAge): pots grow, no contributions
+ * - Drawdown phase (age >= retirementAge): pots are drawn down to meet expenses
+ *   - Before pensionAccessAge: withdraw from accessible pots only
+ *   - From pensionAccessAge: withdraw proportionally from accessible + pension
  */
 export function generatePotGrowthTable(
   buckets: SavingsBucket[],
   currentAge: number,
   endAge: number,
   realGrowthRate: number,
-  pensionAccessAge: number
+  pensionAccessAge: number,
+  coastFireAge: number,
+  annualAccessibleContribution: number,
+  annualLockedContribution: number,
+  retirementAge: number,
+  annualNetExpenses: number
 ): PotGrowthRow[] {
   const growthFactor = 1 + (realGrowthRate / 100);
 
@@ -953,36 +968,123 @@ export function generatePotGrowthTable(
   let giaBalance = 0;
   let pensionBalance = 0;
 
+  // Distribute accessible contributions proportionally to ISA vs Cash
+  const totalAccessible = buckets.reduce((s, b) => {
+    const t = b.type.toLowerCase();
+    if (t === 'cash' || t === 'isa' || t === 'lisa' || t === 'gia') return s + clampNumber(b.balance);
+    return s;
+  }, 0) || 1;
+
+  const isaShare = buckets.filter(b => ['isa', 'lisa'].includes(b.type.toLowerCase()))
+    .reduce((s, b) => s + clampNumber(b.balance), 0) / totalAccessible;
+  const cashShare = buckets.filter(b => b.type.toLowerCase() === 'cash')
+    .reduce((s, b) => s + clampNumber(b.balance), 0) / totalAccessible;
+  const giaShare = Math.max(0, 1 - isaShare - cashShare);
+
+  // Annual contribution splits
+  const annualIsaContrib = annualAccessibleContribution * isaShare;
+  const annualCashContrib = annualAccessibleContribution * cashShare;
+  const annualGiaContrib = annualAccessibleContribution * giaShare;
+
   for (const b of buckets) {
     const t = b.type.toLowerCase();
     const bal = clampNumber(b.balance);
-    if (t === 'cash') {
-      cashBalance += bal;
-    } else if (t === 'isa' || t === 'lisa') {
-      isaBalance += bal;
-    } else if (t === 'gia') {
-      giaBalance += bal;
-    } else {
-      // All pension types
-      pensionBalance += bal;
-    }
+    if (t === 'cash') cashBalance += bal;
+    else if (t === 'isa' || t === 'lisa') isaBalance += bal;
+    else if (t === 'gia') giaBalance += bal;
+    else pensionBalance += bal;
   }
 
   const rows: PotGrowthRow[] = [];
+  const startAge = Math.ceil(currentAge);
 
-  for (let age = Math.ceil(currentAge); age <= endAge; age++) {
-    const yearsFromNow = age - currentAge;
-    const factor = Math.pow(growthFactor, yearsFromNow);
+  for (let age = startAge; age <= endAge; age++) {
+    // Determine phase
+    const effectiveCoastAge = coastFireAge > 0 ? Math.floor(coastFireAge) : Infinity;
+    const phase: PotGrowthRow['phase'] =
+      age <= effectiveCoastAge ? 'accumulation'
+      : age < retirementAge   ? 'coasting'
+      : 'drawdown';
 
-    const cash = cashBalance * factor;
-    const isa = isaBalance * factor;
-    const gia = giaBalance * factor;
-    const pension = pensionBalance * factor;
-    const total = cash + isa + gia + pension;
-    // Accessible = cash + ISA + GIA, pension only accessible from pensionAccessAge
-    const accessible = cash + isa + gia + (age >= pensionAccessAge ? pension : 0);
+    // 1. Apply growth to all pots first
+    cashBalance    *= growthFactor;
+    isaBalance     *= growthFactor;
+    giaBalance     *= growthFactor;
+    pensionBalance *= growthFactor;
 
-    rows.push({ age, cash, isa, gia, pension, accessible, total });
+    // 2. Add contributions if still accumulating
+    if (phase === 'accumulation') {
+      isaBalance     += annualIsaContrib;
+      cashBalance    += annualCashContrib;
+      giaBalance     += annualGiaContrib;
+      pensionBalance += annualLockedContribution;
+    }
+
+    // 3. Handle withdrawals in drawdown phase
+    let withdrawalAccessible = 0;
+    let withdrawalPension = 0;
+    let isShortfall = false;
+
+    if (phase === 'drawdown') {
+      const accessibleNow = cashBalance + isaBalance + giaBalance;
+      const pensionNow = pensionBalance;
+      const pensionUnlocked = age >= pensionAccessAge;
+
+      if (!pensionUnlocked) {
+        // Bridge phase: draw only from accessible
+        withdrawalAccessible = Math.min(annualNetExpenses, accessibleNow);
+        withdrawalPension = 0;
+        if (withdrawalAccessible < annualNetExpenses) isShortfall = true;
+      } else {
+        // Pension unlocked: draw proportionally from accessible and pension
+        const totalNow = accessibleNow + pensionNow;
+        if (totalNow > 0) {
+          const accessibleFrac = accessibleNow / totalNow;
+          withdrawalAccessible = annualNetExpenses * accessibleFrac;
+          withdrawalPension = annualNetExpenses * (1 - accessibleFrac);
+          // Clamp to available balances
+          withdrawalAccessible = Math.min(withdrawalAccessible, accessibleNow);
+          withdrawalPension = Math.min(withdrawalPension, pensionNow);
+          const totalWithdrawn = withdrawalAccessible + withdrawalPension;
+          if (totalWithdrawn < annualNetExpenses) isShortfall = true;
+        } else {
+          isShortfall = true;
+        }
+      }
+
+      // Deduct withdrawals from pots (proportional split within accessible pots)
+      if (withdrawalAccessible > 0 && accessibleNow > 0) {
+        const accFrac = withdrawalAccessible / accessibleNow;
+        cashBalance    -= cashBalance    * accFrac;
+        isaBalance     -= isaBalance     * accFrac;
+        giaBalance     -= giaBalance     * accFrac;
+      }
+      pensionBalance -= withdrawalPension;
+
+      // Guard against negatives
+      cashBalance    = Math.max(0, cashBalance);
+      isaBalance     = Math.max(0, isaBalance);
+      giaBalance     = Math.max(0, giaBalance);
+      pensionBalance = Math.max(0, pensionBalance);
+    }
+
+    const accessible = cashBalance + isaBalance + giaBalance + (age >= pensionAccessAge ? pensionBalance : 0);
+    const total = cashBalance + isaBalance + giaBalance + pensionBalance;
+
+    rows.push({
+      age,
+      cash: cashBalance,
+      isa: isaBalance,
+      gia: giaBalance,
+      pension: pensionBalance,
+      accessible,
+      total,
+      phase,
+      withdrawalAccessible,
+      withdrawalPension,
+      totalWithdrawal: withdrawalAccessible + withdrawalPension,
+      isShortfall,
+    });
   }
 
   return rows;
@@ -1208,3 +1310,128 @@ export function requiredGrossForNet(targetNet: number, taxCode: string, region: 
   }
   return roundPounds(high);
 }
+
+export interface ExcelPlanRow {
+  age: number;
+  netIncome: number;
+  source: "Salary" | "ISA" | "PP" | "ISA+PP" | "Shortfall";
+  phase: "Building" | "Coasting" | "FI";
+  isaTotal: number;
+  isaChange: number;
+  ppTotal: number;
+  ppChange: number;
+  postTaxSP: number;
+  netRequired: number;
+  totalPot: number;
+}
+
+export function generateExcelPlanTable(
+  currentAge: number,
+  coastAge: number,
+  retirementAge: number,
+  endAge: number,
+  startingIsa: number,
+  startingPp: number,
+  netIncomeRequired: number,
+  incomeInflation: number,
+  isaGrowth: number,
+  ppGrowth: number,
+  isaAddition: number,
+  ppAddition: number,
+  statePensionStart: number,
+  statePensionTaxFactor: number,
+  statePensionInflation: number,
+  ppTaxFactor: number
+): ExcelPlanRow[] {
+  const rows: ExcelPlanRow[] = [];
+  const startAge = Math.ceil(currentAge);
+
+  let isaTotal = startingIsa;
+  let ppTotal = startingPp;
+  let netIncome = netIncomeRequired;
+  let postTaxSP = statePensionStart * statePensionTaxFactor;
+
+  // Track previous year's changes to calculate current year's totals
+  let prevIsaChange = 0;
+  let prevPpChange = 0;
+
+  for (let age = startAge; age <= endAge; age++) {
+    // 1. Calculate pot totals based on previous year's balances and changes
+    if (age > startAge) {
+      isaTotal = isaTotal * (1 + isaGrowth / 100) + prevIsaChange;
+      ppTotal = ppTotal * (1 + ppGrowth / 100) + prevPpChange;
+      netIncome = netIncome * (1 + incomeInflation / 100);
+      postTaxSP = postTaxSP * (1 + statePensionInflation / 100);
+    }
+
+    // Guard against negative balances
+    isaTotal = Math.max(0, isaTotal);
+    ppTotal = Math.max(0, ppTotal);
+
+    // 2. Determine phase
+    let phase: "Building" | "Coasting" | "FI" = "FI";
+    if (age < coastAge) {
+      phase = "Building";
+    } else if (age < retirementAge) {
+      phase = "Coasting";
+    }
+
+    // 3. Net Required from Pots
+    const netRequired = age > 67 ? Math.max(0, netIncome - postTaxSP) : netIncome;
+
+    // 4. Source & Changes
+    let source: "Salary" | "ISA" | "PP" | "ISA+PP" | "Shortfall" = "Salary";
+    let isaChange = 0;
+    let ppChange = 0;
+
+    if (phase === "Building") {
+      source = "Salary";
+      isaChange = isaAddition;
+      ppChange = ppAddition;
+    } else if (phase === "Coasting") {
+      source = "Salary";
+      isaChange = 0;
+      ppChange = 0;
+    } else {
+      // FI Phase - Withdrawals
+      if (isaTotal >= netRequired) {
+        source = "ISA";
+        isaChange = -netRequired;
+        ppChange = 0;
+      } else if (ppTotal * ppTaxFactor >= netRequired) {
+        source = "PP";
+        isaChange = 0;
+        ppChange = -netRequired / ppTaxFactor;
+      } else if (isaTotal + ppTotal * ppTaxFactor >= netRequired) {
+        source = "ISA+PP";
+        isaChange = -isaTotal;
+        ppChange = -(netRequired - isaTotal) / ppTaxFactor;
+      } else {
+        source = "Shortfall";
+        isaChange = -isaTotal;
+        ppChange = -ppTotal;
+      }
+    }
+
+    rows.push({
+      age,
+      netIncome,
+      source,
+      phase,
+      isaTotal,
+      isaChange,
+      ppTotal,
+      ppChange,
+      postTaxSP,
+      netRequired,
+      totalPot: isaTotal + ppTotal,
+    });
+
+    // Save changes to apply in the next iteration
+    prevIsaChange = isaChange;
+    prevPpChange = ppChange;
+  }
+
+  return rows;
+}
+
