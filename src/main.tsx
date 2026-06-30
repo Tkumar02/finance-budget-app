@@ -65,6 +65,9 @@ import {
   PotGrowthRow,
   generateExcelPlanTable,
   ExcelPlanRow,
+  runMonteCarloSimulation,
+  MonteCarloResult,
+  AnnualContributionSchedule,
 } from "./calculations";
 import "./styles.css";
 
@@ -80,17 +83,52 @@ function TextInput({ value, onChange, placeholder }: { value: string; onChange: 
 }
 
 export function NumberInput({ value, onChange, suffix, placeholder, max }: { value: number; onChange: (value: number) => void; suffix?: string; placeholder?: string; max?: number }) {
+  const [localValue, setLocalValue] = useState<string>(
+    value !== undefined && value !== null ? (Math.round(value * 100) / 100).toString() : ""
+  );
+
+  useEffect(() => {
+    if (value !== undefined && value !== null) {
+      const rounded = Math.round(value * 100) / 100;
+      if (parseFloat(localValue) !== rounded) {
+        setLocalValue(rounded.toString());
+      }
+    } else {
+      setLocalValue("");
+    }
+  }, [value]);
+
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const rawVal = e.target.value;
+    setLocalValue(rawVal);
+    if (rawVal === "") {
+      onChange(0);
+      return;
+    }
+    let val = Number(rawVal);
+    if (!isNaN(val)) {
+      if (max !== undefined) val = Math.min(val, max);
+      val = Math.round(val * 100) / 100;
+      onChange(val);
+    }
+  };
+
+  const handleBlur = () => {
+    if (localValue !== "") {
+      const val = Math.round(Number(localValue) * 100) / 100;
+      setLocalValue(val.toString());
+    }
+  };
+
   return (
     <span className="number-field">
       <input
         type="number"
+        step="any"
         placeholder={placeholder}
-        value={value === undefined || value === null ? "" : value}
-        onChange={(event) => {
-          let val = event.target.value === "" ? 0 : Number(event.target.value);
-          if (max !== undefined) val = Math.min(val, max);
-          onChange(val);
-        }}
+        value={localValue}
+        onChange={handleChange}
+        onBlur={handleBlur}
       />
       {suffix ? <span>{suffix}</span> : null}
     </span>
@@ -310,6 +348,8 @@ function App() {
   const [swr, setSwr] = useState(4);
   const [realGrowth, setRealGrowth] = useState(3);
   const [firePassiveIncome, setFirePassiveIncome] = useState(0);
+  const [pensionTaxMethod, setPensionTaxMethod] = useState<'ufpls' | 'lump-sum'>("ufpls");
+  const [volatility, setVolatility] = useState<number>(12);
 
   const [pendingContributions, setPendingContributions] = useState<{bucketId: string, count: number, totalAmount: number}[]>([]);
   const [pendingMortgageUpdate, setPendingMortgageUpdate] = useState<{months: number, newBalance: number, payments: number} | null>(null);
@@ -622,6 +662,8 @@ function App() {
     setSwr(d.swr ?? 4);
     setRealGrowth(d.realGrowth ?? 3);
     setFirePassiveIncome(d.firePassiveIncome ?? 0);
+    setPensionTaxMethod(d.pensionTaxMethod ?? 'ufpls');
+    setVolatility(d.volatility ?? 12);
     
     // Normalize and set lastSavedData
     setLastSavedData(JSON.stringify({
@@ -649,6 +691,8 @@ function App() {
       swr: d.swr ?? 4,
       realGrowth: d.realGrowth ?? 3,
       firePassiveIncome: d.firePassiveIncome ?? 0,
+      pensionTaxMethod: d.pensionTaxMethod ?? 'ufpls',
+      volatility: d.volatility ?? 12,
     }));
   };
 
@@ -679,6 +723,8 @@ function App() {
       showAssetsCard,
       showCoastFireCard,
       firePassiveIncome,
+      pensionTaxMethod,
+      volatility,
     };
 
     if (currentPlanId) {
@@ -1051,8 +1097,54 @@ const projectionBuckets = useMemo(() => {
   const currentAccessibleWealth = savings.filter(s => isBucketAccessible(s, currentAge)).reduce((sum, s) => sum + s.balance, 0);
   const currentLockedWealth = savings.filter(s => !isBucketAccessible(s, currentAge)).reduce((sum, s) => sum + s.balance, 0);
   
-  const annualAccessibleContribution = savings.filter(s => isBucketAccessible(s, currentAge)).reduce((sum, s) => sum + s.monthly, 0) * 12;
-  const annualLockedContribution = savings.filter(s => !isBucketAccessible(s, currentAge)).reduce((sum, s) => sum + s.monthly, 0) * 12;
+  const annualContributionsAtAge = useMemo<AnnualContributionSchedule>(() => {
+    return (age: number) => savings.reduce((totals, bucket) => {
+      if (bucket.isHidden) return totals;
+
+      const monthly = Math.max(0, clampNumber(bucket.monthly));
+      if (monthly <= 0) return totals;
+
+      if (bucket.stopContributingAge && age >= bucket.stopContributingAge) return totals;
+      if (bucket.type === "lisa" && age >= 50) return totals;
+
+      const annual = monthly * 12;
+      const contribution = bucket.type === "lisa" ? annual * 1.25 : annual;
+
+      if (isBucketAccessible(bucket, age)) {
+        totals.accessible += contribution;
+      } else {
+        totals.locked += contribution;
+      }
+
+      return totals;
+    }, { accessible: 0, locked: 0 });
+  }, [savings]);
+
+  const annualUserContributionsAtAge = useMemo<AnnualContributionSchedule>(() => {
+    return (age: number) => savings.reduce((totals, bucket) => {
+      if (bucket.isHidden) return totals;
+
+      const monthly = Math.max(0, clampNumber(bucket.monthly));
+      if (monthly <= 0) return totals;
+
+      if (bucket.stopContributingAge && age >= bucket.stopContributingAge) return totals;
+      if (bucket.type === "lisa" && age >= 50) return totals;
+
+      const annual = monthly * 12;
+
+      if (isBucketAccessible(bucket, age)) {
+        totals.accessible += annual;
+      } else {
+        totals.locked += annual;
+      }
+
+      return totals;
+    }, { accessible: 0, locked: 0 });
+  }, [savings]);
+
+  const currentAnnualContributions = annualUserContributionsAtAge(currentAge);
+  const annualAccessibleContribution = currentAnnualContributions.accessible;
+  const annualLockedContribution = currentAnnualContributions.locked;
 
   const coastFireResult = useMemo(() => calculateCoastFire(
     currentAge,
@@ -1064,8 +1156,13 @@ const projectionBuckets = useMemo(() => {
     realGrowth,
     swr,
     annualAccessibleContribution,
-    annualLockedContribution
-  ), [currentAge, retirementAge, pensionAccessAge, currentAccessibleWealth, currentLockedWealth, retirementSummary.currentMonthlyExpenses, annualAccessibleContribution, annualLockedContribution, realGrowth, swr]);
+    annualLockedContribution,
+    0,
+    "1257L",
+    "england-wales-ni",
+    "ufpls",
+    annualContributionsAtAge
+  ), [currentAge, retirementAge, pensionAccessAge, currentAccessibleWealth, currentLockedWealth, retirementSummary.currentMonthlyExpenses, annualAccessibleContribution, annualLockedContribution, annualContributionsAtAge, realGrowth, swr]);
 
   
   const sections: { id: SectionId; title: string; value: string; detail: string; color: string; subValue?: string; subLabel?: string }[] = [
@@ -1307,6 +1404,11 @@ const projectionBuckets = useMemo(() => {
           passiveIncome={firePassiveIncome}
           setPassiveIncome={setFirePassiveIncome}
           savings={savings}
+          pensionTaxMethod={pensionTaxMethod}
+          setPensionTaxMethod={setPensionTaxMethod}
+          volatility={volatility}
+          setVolatility={setVolatility}
+          annualContributionsAtAge={annualContributionsAtAge}
         />
       ) : null}
 
@@ -1375,7 +1477,12 @@ function CoastFireSection({
   taxSettings,
   passiveIncome,
   setPassiveIncome,
-  savings
+  savings,
+  pensionTaxMethod,
+  setPensionTaxMethod,
+  volatility,
+  setVolatility,
+  annualContributionsAtAge
 }: any) {
   const [showGrowthTable, setShowGrowthTable] = useState(false);
   const [swr, setSwr] = useState(4);
@@ -1419,8 +1526,12 @@ function CoastFireSection({
     swr,
     annualAccessibleContribution,
     annualLockedContribution,
-    passiveIncome
-  ), [currentAge, retirementAge, pensionAccessAge, currentAccessibleBalance, currentLockedBalance, annualExpenses, realGrowth, swr, annualAccessibleContribution, annualLockedContribution, passiveIncome]);
+    passiveIncome,
+    taxSettings.taxCode,
+    taxSettings.region,
+    pensionTaxMethod,
+    annualContributionsAtAge
+  ), [currentAge, retirementAge, pensionAccessAge, currentAccessibleBalance, currentLockedBalance, annualExpenses, realGrowth, swr, annualAccessibleContribution, annualLockedContribution, passiveIncome, taxSettings, pensionTaxMethod, annualContributionsAtAge]);
 
   const excelPlanTable = useMemo(() => {
     return generateExcelPlanTable(
@@ -1470,8 +1581,11 @@ function CoastFireSection({
     swr,
     annualAccessibleContribution,
     annualLockedContribution,
-    passiveIncome
-  ), [currentAge, pensionAccessAge, currentAccessibleBalance, currentLockedBalance, annualExpenses, realGrowth, swr, annualAccessibleContribution, annualLockedContribution, passiveIncome]);
+    passiveIncome,
+    taxSettings.taxCode,
+    taxSettings.region,
+    annualContributionsAtAge
+  ), [currentAge, pensionAccessAge, currentAccessibleBalance, currentLockedBalance, annualExpenses, realGrowth, swr, annualAccessibleContribution, annualLockedContribution, passiveIncome, taxSettings, annualContributionsAtAge]);
 
   const grossSalaryRequired = useMemo(() => requiredGrossForNet(
     netExpenses / 12,
@@ -1504,8 +1618,37 @@ function CoastFireSection({
     annualAccessibleContribution,
     annualLockedContribution,
     retirementAge,
-    netExpenses
-  ), [savings, currentAge, tableEndAge, realGrowth, pensionAccessAge, coastStopAge, annualAccessibleContribution, annualLockedContribution, retirementAge, netExpenses]);
+    annualExpenses,
+    passiveIncome,
+    taxSettings.taxCode,
+    taxSettings.region,
+    pensionTaxMethod
+  ), [savings, currentAge, tableEndAge, realGrowth, pensionAccessAge, coastStopAge, annualAccessibleContribution, annualLockedContribution, retirementAge, annualExpenses, passiveIncome, taxSettings, pensionTaxMethod]);
+
+  const retirementRow = useMemo(() => potGrowthTable.find(r => r.age === Math.floor(retirementAge)), [potGrowthTable, retirementAge]);
+  const cashAtRetire = retirementRow ? retirementRow.cash : 0;
+  const isaAtRetire = retirementRow ? retirementRow.isa : 0;
+  const giaAtRetire = retirementRow ? retirementRow.gia : 0;
+  const pensionAtRetire = retirementRow ? retirementRow.pension : 0;
+
+  const monteCarloResult = useMemo(() => {
+    return runMonteCarloSimulation(
+      cashAtRetire,
+      isaAtRetire,
+      giaAtRetire,
+      pensionAtRetire,
+      retirementAge,
+      tableEndAge,
+      pensionAccessAge,
+      annualExpenses,
+      passiveIncome,
+      realGrowth,
+      volatility,
+      taxSettings.taxCode,
+      taxSettings.region,
+      pensionTaxMethod
+    );
+  }, [cashAtRetire, isaAtRetire, giaAtRetire, pensionAtRetire, retirementAge, tableEndAge, pensionAccessAge, annualExpenses, passiveIncome, realGrowth, volatility, taxSettings, pensionTaxMethod]);
 
   const fireAgeRow = fullFireResult.fullFireAge > 0
     ? potGrowthTable.find(r => r.age === Math.floor(fullFireResult.fullFireAge))
@@ -1539,7 +1682,7 @@ function CoastFireSection({
                 style={{ fontSize: '0.75rem', minHeight: '30px', padding: '0 12px', border: 'none', cursor: 'pointer', borderRadius: '6px' }}
                 onClick={() => setSimulatorMode('excel')}
               >
-                Excel Plan Calculator
+                Plan Calculator
               </button>
             </div>
           </div>
@@ -1574,6 +1717,27 @@ function CoastFireSection({
                 <label style={{ fontSize: '0.8rem', display: 'flex', flexDirection: 'column', gap: '4px', fontWeight: 600, color: '#475569' }}>
                   Safe Withdrawal Rate (SWR) %
                   <NumberInput value={swr} onChange={setSwr} suffix="%" />
+                </label>
+                <label style={{ fontSize: '0.8rem', display: 'flex', flexDirection: 'column', gap: '4px', fontWeight: 600, color: '#475569' }}>
+                  Pension Tax Method
+                  <select 
+                    value={pensionTaxMethod} 
+                    onChange={(e) => setPensionTaxMethod(e.target.value as 'ufpls' | 'lump-sum')}
+                    style={{ 
+                      padding: '8px 12px', 
+                      borderRadius: '6px', 
+                      border: '1px solid #cbd5e1', 
+                      background: 'white', 
+                      fontSize: '0.8rem',
+                      fontWeight: 500,
+                      color: '#334155',
+                      height: '38px',
+                      boxSizing: 'border-box'
+                    }}
+                  >
+                    <option value="ufpls">UFPLS (25% tax-free / 75% taxed per withdrawal)</option>
+                    <option value="lump-sum">25% tax-free Lump Sum upfront</option>
+                  </select>
                 </label>
               </div>
             </div>
@@ -1624,7 +1788,9 @@ function CoastFireSection({
                     {updatedResult.isCoastFire 
                       ? `Your current savings of ${money.format(currentTotalWealth)} are large enough to fund your retirement through growth alone. You could stop contributing today!`
                       : (updatedResult.coastFireAge === -1 
-                        ? `Even if you keep contributing ${money.format(annualContribution)}/yr, you won't reach Coast FIRE by retirement age ${retirementAge.toFixed(0)}.`
+                        ? (fullFireResult.fullFireAge > 0
+                          ? `You won't reach Coast FIRE before retirement age ${retirementAge.toFixed(0)}, but at ${money.format(annualContribution)}/yr your projected Full FIRE age is ${Math.floor(fullFireResult.fullFireAge)}.`
+                          : `Even if you keep contributing ${money.format(annualContribution)}/yr, you won't reach Coast FIRE by retirement age ${retirementAge.toFixed(0)}.`)
                         : `If you keep contributing ${money.format(annualContribution)}/yr, you will reach Coast FIRE at age ${Math.floor(updatedResult.coastFireAge)}. From that point, you don't need to save another penny for retirement.`)}
                   </p>
                 </div>
@@ -1705,10 +1871,10 @@ function CoastFireSection({
                       <strong style={{ color: '#1e293b' }}>{money.format(fullFireResult.targetPotAtFullFireAge)}</strong>
                     </div>
                   )}
-                  {fireAgeRow && (
+                  {fullFireResult.fullFireAge > 0 && (
                     <div style={{ display: 'flex', justifyContent: 'space-between', margin: '6px 0', fontSize: '0.9rem' }}>
                       <span style={{ color: '#475569' }}>Projected Pot at Full FIRE:</span>
-                      <strong style={{ color: '#1e293b' }}>{money.format(fireAgeRow.total)}</strong>
+                      <strong style={{ color: '#1e293b' }}>{money.format(fullFireResult.fullFirePotAtAge)}</strong>
                     </div>
                   )}
                 </div>
@@ -1872,6 +2038,64 @@ function CoastFireSection({
                 <br/><br/>
                 <strong>Your Coasting Income:</strong> Once you reach Coast FIRE (Age {updatedResult.coastFireAge === -1 ? "N/A" : Math.floor(updatedResult.coastFireAge)}), you no longer need to save for retirement. You only need to earn enough from work to cover your remaining net living expenses: <strong>{money.format(netExpenses)}/year net</strong> (equivalent to <strong>{money.format(grossSalaryRequired)}/year gross</strong>) in addition to your passive income of <strong>{money.format(passiveIncome)}/year</strong>.
               </p>
+            </div>
+
+            <div style={{ marginTop: '30px', padding: '24px', background: 'linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%)', borderRadius: '12px', border: '1px solid #e2e8f0', boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.05)' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '15px', marginBottom: '20px' }}>
+                <h3 style={{ margin: 0, fontSize: '1.25rem', color: '#1e293b', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  🎲 Retirement Monte Carlo Simulator
+                </h3>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <label style={{ fontSize: '0.8rem', fontWeight: 600, color: '#475569', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    Portfolio Volatility
+                    <NumberInput value={volatility} onChange={setVolatility} suffix="%" />
+                  </label>
+                </div>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '20px', marginBottom: '24px' }}>
+                <div style={{ 
+                  background: monteCarloResult.successRate >= 90 ? '#f0fff4' : (monteCarloResult.successRate >= 80 ? '#fffbeb' : '#fff5f5'),
+                  padding: '20px',
+                  borderRadius: '8px',
+                  border: `1px solid ${monteCarloResult.successRate >= 90 ? '#bbf7d0' : (monteCarloResult.successRate >= 80 ? '#fef3c7' : '#feb2b2')}`,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  justifyContent: 'center',
+                  alignItems: 'center',
+                  textAlign: 'center'
+                }}>
+                  <span style={{ fontSize: '0.8rem', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: 700 }}>
+                    Probability of Success
+                  </span>
+                  <h4 style={{ fontSize: '3rem', margin: '10px 0', color: monteCarloResult.successRate >= 90 ? '#166534' : (monteCarloResult.successRate >= 80 ? '#92400e' : '#9b1c1c'), fontWeight: 800 }}>
+                    {monteCarloResult.successRate.toFixed(1)}%
+                  </h4>
+                  <p style={{ fontSize: '0.8rem', color: '#475569', margin: 0, fontWeight: 500 }}>
+                    {monteCarloResult.successRate >= 90 
+                      ? 'Highly secure! Your retirement strategy is highly resilient to market shocks.' 
+                      : (monteCarloResult.successRate >= 80 
+                          ? 'Plan is generally stable, but consider a small margin of safety.' 
+                          : 'High risk of depletion. You may need higher contributions or lower expenses.')}
+                  </p>
+                </div>
+
+                <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+                  <h4 style={{ margin: '0 0 10px 0', fontSize: '1rem', color: '#334155' }}>What does this success rate mean?</h4>
+                  <p style={{ fontSize: '0.825rem', color: '#64748b', lineHeight: '1.5', margin: 0 }}>
+                    Instead of assuming a static growth rate (e.g. constant {realGrowth}%), we simulate <strong>1,000 distinct retirements</strong> where the market return fluctuates randomly each year (averaging {realGrowth}% with a standard deviation of {volatility}% volatility).
+                    <br/><br/>
+                    A success rate of <strong>{monteCarloResult.successRate.toFixed(1)}%</strong> means that in <strong>{(monteCarloResult.successRate * 10).toFixed(0)} out of 1,000</strong> simulated trials, your pension and accessible savings survived until age {tableEndAge} without hitting zero.
+                  </p>
+                </div>
+              </div>
+
+              <div style={{ background: '#ffffff', padding: '20px', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+                <h4 style={{ margin: '0 0 15px 0', fontSize: '0.95rem', color: '#334155', textAlign: 'center' }}>
+                  Stochastic Pot Trajectories (Ages {Math.floor(retirementAge)} to {tableEndAge})
+                </h4>
+                <MonteCarloChart result={monteCarloResult} />
+              </div>
             </div>
           </>
         ) : (
@@ -4630,3 +4854,150 @@ function LineChart({ data, years, colors }: any) {
 }
 }
 
+function MonteCarloChart({ result }: { result: MonteCarloResult }) {
+  const width = 800;
+  const height = 350;
+  const padding = 80;
+
+  const ages = result.ages;
+  const pessimistic = result.pessimisticPath;
+  const median = result.medianPath;
+  const optimistic = result.optimisticPath;
+
+  const maxVal = Math.max(
+    10000,
+    ...optimistic,
+    ...median,
+    ...pessimistic
+  );
+
+  const getX = (age: number) => {
+    if (ages.length <= 1) return padding;
+    const fraction = (age - ages[0]) / (ages[ages.length - 1] - ages[0]);
+    return padding + fraction * (width - 2 * padding);
+  };
+
+  const getY = (val: number) => {
+    return height - padding - (val / maxVal) * (height - 2 * padding);
+  };
+
+  const [hoverIdx, setHoverIdx] = useState<number | null>(null);
+  const [hoverCoords, setHoverCoords] = useState<{ x: number; y: number } | null>(null);
+
+  const handleMouseMove = (e: React.MouseEvent<SVGSVGElement>) => {
+    const svg = e.currentTarget;
+    const CTM = svg.getScreenCTM();
+    if (!CTM) return;
+    const svgPoint = svg.createSVGPoint();
+    svgPoint.x = e.clientX;
+    svgPoint.y = e.clientY;
+    const transformedPoint = svgPoint.matrixTransform(CTM.inverse());
+
+    const closestIdx = ages.reduce((prev, currAge, index) => {
+      const xPos = getX(currAge);
+      const prevXPos = getX(ages[prev]);
+      return Math.abs(xPos - transformedPoint.x) < Math.abs(prevXPos - transformedPoint.x) ? index : prev;
+    }, 0);
+
+    setHoverIdx(closestIdx);
+    setHoverCoords({ x: transformedPoint.x, y: transformedPoint.y });
+  };
+
+  const handleMouseLeave = () => {
+    setHoverIdx(null);
+    setHoverCoords(null);
+  };
+
+  const pessimisticPoints = ages.map((age, idx) => getX(age) + ',' + getY(pessimistic[idx])).join(' ');
+  const medianPoints = ages.map((age, idx) => getX(age) + ',' + getY(median[idx])).join(' ');
+  const optimisticPoints = ages.map((age, idx) => getX(age) + ',' + getY(optimistic[idx])).join(' ');
+
+  return (
+    <div style={{ position: 'relative' }}>
+      <svg
+        viewBox={`0 0 ${width} ${height}`}
+        style={{ width: '100%', height: 'auto', background: '#f8fafc', borderRadius: '8px', border: '1px solid #e2e8f0' }}
+        onMouseMove={handleMouseMove}
+        onMouseLeave={handleMouseLeave}
+      >
+        {[0, 0.25, 0.5, 0.75, 1].map(p => (
+          <g key={p}>
+            <line x1={padding} y1={getY(maxVal * p)} x2={width - padding} y2={getY(maxVal * p)} stroke='#e2e8f0' strokeDasharray='4' />
+            <text x={padding - 10} y={getY(maxVal * p) + 4} textAnchor='end' fontSize='11' fill='#64748b'>{money.format(maxVal * p)}</text>
+          </g>
+        ))}
+
+        {ages.filter((_, idx) => idx === 0 || idx === ages.length - 1 || idx % 5 === 0).map(age => (
+          <g key={age}>
+            <line x1={getX(age)} y1={height - padding} x2={getX(age)} y2={height - padding + 5} stroke='#cbd5e1' />
+            <text x={getX(age)} y={height - padding + 20} textAnchor='middle' fontSize='11' fill='#64748b'>Age {age}</text>
+          </g>
+        ))}
+
+        <polyline fill='none' stroke='#ef4444' strokeWidth='2' strokeDasharray='4 2' points={pessimisticPoints} />
+        <polyline fill='none' stroke='#3b82f6' strokeWidth='3' points={medianPoints} />
+        <polyline fill='none' stroke='#10b981' strokeWidth='2' strokeDasharray='4 2' points={optimisticPoints} />
+
+        {hoverIdx !== null && (
+          <line
+            x1={getX(ages[hoverIdx])}
+            y1={padding}
+            x2={getX(ages[hoverIdx])}
+            y2={height - padding}
+            stroke='#94a3b8'
+            strokeDasharray='3 3'
+            strokeWidth='1'
+          />
+        )}
+      </svg>
+
+      {hoverIdx !== null && hoverCoords && (
+        <div
+          style={{
+            position: 'absolute',
+            left: hoverCoords.x + 15,
+            top: hoverCoords.y - 15,
+            background: 'white',
+            border: '1px solid #cbd5e1',
+            padding: '10px',
+            borderRadius: '6px',
+            pointerEvents: 'none',
+            zIndex: 1000,
+            fontSize: '0.75rem',
+            boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)',
+            lineHeight: '1.4'
+          }}
+        >
+          <div style={{ fontWeight: 700, color: '#1e293b', marginBottom: '4px' }}>Age {ages[hoverIdx]}</div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#10b981' }}>
+            <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#10b981' }} />
+            <strong>Optimistic (90th %):</strong> {money.format(optimistic[hoverIdx])}
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#3b82f6' }}>
+            <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#3b82f6' }} />
+            <strong>Median (50th %):</strong> {money.format(median[hoverIdx])}
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#ef4444' }}>
+            <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#ef4444' }} />
+            <strong>Pessimistic (10th %):</strong> {money.format(pessimistic[hoverIdx])}
+          </div>
+        </div>
+      )}
+
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '20px', marginTop: '14px', justifyContent: 'center' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <span style={{ width: '20px', height: '3px', background: '#10b981', borderTop: '2px dashed #10b981' }} />
+          <small style={{ fontWeight: 600, color: '#475569' }}>Optimistic (Top 10% market outcomes)</small>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <span style={{ width: '20px', height: '3px', background: '#3b82f6' }} />
+          <small style={{ fontWeight: 600, color: '#475569' }}>Median (Typical market outcomes)</small>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <span style={{ width: '20px', height: '3px', background: '#ef4444', borderTop: '2px dashed #ef4444' }} />
+          <small style={{ fontWeight: 600, color: '#475569' }}>Pessimistic (Bottom 10% market outcomes)</small>
+        </div>
+      </div>
+    </div>
+  );
+}

@@ -693,24 +693,69 @@ export function calculatePVBridge(annualExpenses: number, realGrowthRate: number
   const growthFactor = 1 + (realGrowthRate / 100);
   let pv = 0;
   for (let i = 0; i < bridgeYears; i++) {
-    pv += annualExpenses / Math.pow(growthFactor, i);
+pv += annualExpenses / Math.pow(growthFactor, i);
   }
   return pv;
 }
 
-export type CoastFireResult = {
-  coastFireAge: number;
-  isCoastFire: boolean;
-  targetPotAtRetirement: number;
-  requiredCurrentBalance: number;
-  requiredCurrentAccessible: number;
-  currentCoastGap: number;
-  projectedPotAtRetirement: number;
-  yearsToCoast: number;
-  bridgeRequired: number;
-  isBridgeFunded: boolean;
-  coastFirePotAtAge: number;
+export function solveGrossPensionWithdrawal(
+  netTarget: number,
+  passiveIncome: number,
+  pensionTaxableFraction: number,
+  taxCode: string,
+  region: Region
+): { grossPension: number; tax: number } {
+  if (netTarget <= 0) {
+    const tax = calculateIncomeTax(passiveIncome, taxCode, 0, region).totalTax;
+    return { grossPension: 0, tax };
+  }
+
+  let low = 0;
+  let high = Math.max(1000000, netTarget * 5);
+  for (let i = 0; i < 40; i++) {
+    const mid = (low + high) / 2;
+    const taxableIncome = passiveIncome + pensionTaxableFraction * mid;
+    const tax = calculateIncomeTax(taxableIncome, taxCode, 0, region).totalTax;
+    const netValue = mid + passiveIncome - tax;
+    
+    if (netValue < (netTarget + passiveIncome)) {
+      low = mid;
+    } else {
+      high = mid;
+    }
+  }
+  
+  const grossPension = high;
+  const finalTaxable = passiveIncome + pensionTaxableFraction * grossPension;
+  const tax = calculateIncomeTax(finalTaxable, taxCode, 0, region).totalTax;
+  
+  return { grossPension, tax };
+}
+
+export type AnnualContributionSchedule = (age: number) => {
+  accessible: number;
+  locked: number;
 };
+
+function annualContributionsForAge(
+  age: number,
+  annualAccessibleContribution: number,
+  annualLockedContribution: number,
+  contributionSchedule?: AnnualContributionSchedule
+) {
+  if (!contributionSchedule) {
+    return {
+      accessible: annualAccessibleContribution,
+      locked: annualLockedContribution,
+    };
+  }
+
+  const scheduled = contributionSchedule(age);
+  return {
+    accessible: Math.max(0, clampNumber(scheduled.accessible)),
+    locked: Math.max(0, clampNumber(scheduled.locked)),
+  };
+}
 
 export function calculateCoastFire(
   currentAge: number,
@@ -723,25 +768,28 @@ export function calculateCoastFire(
   swr: number = 4,
   annualAccessibleContribution: number = 0,
   annualLockedContribution: number = 0,
-  passiveIncome: number = 0
+  passiveIncome: number = 0,
+  taxCode: string = "1257L",
+  region: Region = "england-wales-ni",
+  pensionTaxMethod: 'ufpls' | 'lump-sum' = 'ufpls',
+  contributionSchedule?: AnnualContributionSchedule
 ): CoastFireResult {
-  const netExpenses = Math.max(0, annualExpenses - passiveIncome);
+  const taxOnPassive = calculateIncomeTax(passiveIncome, taxCode, 0, region).totalTax;
+  const netPassive = Math.max(0, passiveIncome - taxOnPassive);
+  const netBridgeExpense = Math.max(0, annualExpenses - netPassive);
   const growthFactor = 1 + (realGrowthRate / 100);
   const bridgeYears = Math.max(0, pensionAccessAge - retirementAge);
-  const bridgeCostAtRetirement = calculatePVBridge(netExpenses, realGrowthRate, bridgeYears);
-  const targetPot = netExpenses / (swr / 100);
+  const bridgeCostAtRetirement = calculatePVBridge(netBridgeExpense, realGrowthRate, bridgeYears);
+  
+  const solved = solveGrossPensionWithdrawal(annualExpenses - passiveIncome, passiveIncome, 0.75, taxCode, region);
+  const targetPot = solved.grossPension / (swr / 100);
   
   function checkStatus(acc: number, lock: number, age: number) {
     const yearsToRetire = Math.max(0, retirementAge - age);
-    
-    // Project current pots to retirementAge (with growth alone, zero contributions)
     const accAtRetire = acc * Math.pow(growthFactor, yearsToRetire);
     const lockAtRetire = lock * Math.pow(growthFactor, yearsToRetire);
     
-    // Condition 1: Can we fund the bridge?
     const canFundBridge = accAtRetire >= bridgeCostAtRetirement;
-    
-    // Condition 2: Is the remaining total enough for the long term?
     const remainingAfterBridge = (accAtRetire - bridgeCostAtRetirement) + lockAtRetire;
     const projectedAtAccess = remainingAfterBridge * Math.pow(growthFactor, bridgeYears);
     
@@ -756,7 +804,6 @@ export function calculateCoastFire(
   let coastFirePotAtAge = 0;
   let projectedPotAtRetirement = 0;
   
-  // We'll track the pots year by year to simulate contributions
   let tempAcc = currentAccessibleBalance;
   let tempLock = currentLockedBalance;
   const nextIntegerAge = Math.ceil(currentAge);
@@ -767,12 +814,11 @@ export function calculateCoastFire(
     coastFirePotAtAge = currentAccessibleBalance + currentLockedBalance;
     projectedPotAtRetirement = (currentAccessibleBalance + currentLockedBalance) * Math.pow(growthFactor, Math.max(0, retirementAge - currentAge));
   } else {
-    // Simulate year by year to find the earliest Coast Age
-    // 1st step: grow to next integer age
     if (firstYearFraction > 0) {
       const firstYearGrowthFactor = Math.pow(growthFactor, firstYearFraction);
-      tempAcc = (tempAcc * firstYearGrowthFactor) + (annualAccessibleContribution * firstYearFraction);
-      tempLock = (tempLock * firstYearGrowthFactor) + (annualLockedContribution * firstYearFraction);
+      const contributions = annualContributionsForAge(currentAge, annualAccessibleContribution, annualLockedContribution, contributionSchedule);
+      tempAcc = (tempAcc * firstYearGrowthFactor) + (contributions.accessible * firstYearFraction);
+      tempLock = (tempLock * firstYearGrowthFactor) + (contributions.locked * firstYearFraction);
       
       const status = checkStatus(tempAcc, tempLock, nextIntegerAge);
       if (status.isFunded) {
@@ -783,8 +829,9 @@ export function calculateCoastFire(
     
     if (coastFireAge === -1) {
       for (let age = nextIntegerAge; age < retirementAge; age++) {
-        tempAcc = (tempAcc * growthFactor) + annualAccessibleContribution;
-        tempLock = (tempLock * growthFactor) + annualLockedContribution;
+        const contributions = annualContributionsForAge(age, annualAccessibleContribution, annualLockedContribution, contributionSchedule);
+        tempAcc = (tempAcc * growthFactor) + contributions.accessible;
+        tempLock = (tempLock * growthFactor) + contributions.locked;
 
         const status = checkStatus(tempAcc, tempLock, age + 1);
         if (status.isFunded) {
@@ -795,23 +842,17 @@ export function calculateCoastFire(
       }
     }
     
-    // Calculate projectedPotAtRetirement based on Coast FIRE status
     if (coastFireAge !== -1) {
       const yearsRemaining = Math.max(0, retirementAge - coastFireAge);
-      // Growth only (no contributions) from coast age to retirement age
       projectedPotAtRetirement = (tempAcc + tempLock) * Math.pow(growthFactor, yearsRemaining);
     } else {
-      // Never reached Coast FIRE by retirement age, so we kept contributing all the way
       projectedPotAtRetirement = tempAcc + tempLock;
     }
   }
 
   const yearsToRetirement = Math.max(0, retirementAge - currentAge);
   
-  // Coast FIRE Number (Required balance today)
-  // Required accessible today = PV_bridge / growth to retirement
   const requiredCurrentAccessible = bridgeCostAtRetirement / Math.pow(growthFactor, yearsToRetirement);
-  // Required total today = (PV_bridge + targetPot / growth during bridge) / growth to retirement
   const requiredCurrentBalance = (bridgeCostAtRetirement + (targetPot / Math.pow(growthFactor, bridgeYears))) / Math.pow(growthFactor, yearsToRetirement);
 
   return {
@@ -847,15 +888,21 @@ export function calculateFullFire(
   swr: number = 4,
   annualAccessibleContribution: number = 0,
   annualLockedContribution: number = 0,
-  passiveIncome: number = 0
+  passiveIncome: number = 0,
+  taxCode: string = "1257L",
+  region: Region = "england-wales-ni",
+  contributionSchedule?: AnnualContributionSchedule
 ): FullFireResult {
-  const netExpenses = Math.max(0, annualExpenses - passiveIncome);
+  const taxOnPassive = calculateIncomeTax(passiveIncome, taxCode, 0, region).totalTax;
+  const netPassive = Math.max(0, passiveIncome - taxOnPassive);
+  const netBridgeExpense = Math.max(0, annualExpenses - netPassive);
   const growthFactor = 1 + (realGrowthRate / 100);
   
   function checkStatus(acc: number, lock: number, age: number) {
     const bridgeYears = Math.max(0, pensionAccessAge - age);
-    const pvBridge = calculatePVBridge(netExpenses, realGrowthRate, bridgeYears);
-    const targetPot = netExpenses / (swr / 100);
+    const pvBridge = calculatePVBridge(netBridgeExpense, realGrowthRate, bridgeYears);
+    const solved = solveGrossPensionWithdrawal(annualExpenses - passiveIncome, passiveIncome, 0.75, taxCode, region);
+    const targetPot = solved.grossPension / (swr / 100);
     
     const canFundBridge = acc >= pvBridge;
     const remainingAfterBridge = (acc - pvBridge) + lock;
@@ -889,8 +936,9 @@ export function calculateFullFire(
 
   if (firstYearFraction > 0) {
     const firstYearGrowthFactor = Math.pow(growthFactor, firstYearFraction);
-    tempAcc = (tempAcc * firstYearGrowthFactor) + (annualAccessibleContribution * firstYearFraction);
-    tempLock = (tempLock * firstYearGrowthFactor) + (annualLockedContribution * firstYearFraction);
+    const contributions = annualContributionsForAge(currentAge, annualAccessibleContribution, annualLockedContribution, contributionSchedule);
+    tempAcc = (tempAcc * firstYearGrowthFactor) + (contributions.accessible * firstYearFraction);
+    tempLock = (tempLock * firstYearGrowthFactor) + (contributions.locked * firstYearFraction);
     
     const status = checkStatus(tempAcc, tempLock, nextIntegerAge);
     if (status.isFunded) {
@@ -902,8 +950,9 @@ export function calculateFullFire(
 
   if (fullFireAge === -1) {
     for (let age = nextIntegerAge; age < 100; age++) {
-      tempAcc = (tempAcc * growthFactor) + annualAccessibleContribution;
-      tempLock = (tempLock * growthFactor) + annualLockedContribution;
+      const contributions = annualContributionsForAge(age, annualAccessibleContribution, annualLockedContribution, contributionSchedule);
+      tempAcc = (tempAcc * growthFactor) + contributions.accessible;
+      tempLock = (tempLock * growthFactor) + contributions.locked;
       
       const status = checkStatus(tempAcc, tempLock, age + 1);
       if (status.isFunded) {
@@ -933,21 +982,12 @@ export type PotGrowthRow = {
   accessible: number;
   total: number;
   phase: 'accumulation' | 'coasting' | 'drawdown';
-  // Withdrawal columns (non-zero only during drawdown phase)
-  withdrawalAccessible: number;  // Amount drawn from ISA/Cash/GIA this year
-  withdrawalPension: number;     // Amount drawn from pension pots this year
+  withdrawalAccessible: number;
+  withdrawalPension: number;
   totalWithdrawal: number;
-  isShortfall: boolean;          // True if pots cannot cover required withdrawal
+  isShortfall: boolean;
 };
 
-/**
- * Projects each pot type year-by-year.
- * - Accumulation phase (age < coastFireAge): pots grow WITH contributions
- * - Coasting phase (coastFireAge <= age < retirementAge): pots grow, no contributions
- * - Drawdown phase (age >= retirementAge): pots are drawn down to meet expenses
- *   - Before pensionAccessAge: withdraw from accessible pots only
- *   - From pensionAccessAge: withdraw proportionally from accessible + pension
- */
 export function generatePotGrowthTable(
   buckets: SavingsBucket[],
   currentAge: number,
@@ -958,17 +998,19 @@ export function generatePotGrowthTable(
   annualAccessibleContribution: number,
   annualLockedContribution: number,
   retirementAge: number,
-  annualNetExpenses: number
+  annualExpenses: number,
+  passiveIncome: number = 0,
+  taxCode: string = "1257L",
+  region: Region = "england-wales-ni",
+  pensionTaxMethod: 'ufpls' | 'lump-sum' = 'ufpls'
 ): PotGrowthRow[] {
   const growthFactor = 1 + (realGrowthRate / 100);
 
-  // Aggregate starting balances by simplified bucket type
   let cashBalance = 0;
   let isaBalance = 0;
   let giaBalance = 0;
   let pensionBalance = 0;
 
-  // Distribute accessible contributions proportionally to ISA vs Cash
   const totalAccessible = buckets.reduce((s, b) => {
     const t = b.type.toLowerCase();
     if (t === 'cash' || t === 'isa' || t === 'lisa' || t === 'gia') return s + clampNumber(b.balance);
@@ -981,10 +1023,50 @@ export function generatePotGrowthTable(
     .reduce((s, b) => s + clampNumber(b.balance), 0) / totalAccessible;
   const giaShare = Math.max(0, 1 - isaShare - cashShare);
 
-  // Annual contribution splits
   const annualIsaContrib = annualAccessibleContribution * isaShare;
   const annualCashContrib = annualAccessibleContribution * cashShare;
   const annualGiaContrib = annualAccessibleContribution * giaShare;
+
+  const annualPotContributionsForAge = (age: number) => {
+    if (buckets.length === 0) {
+      return {
+        cash: annualCashContrib,
+        isa: annualIsaContrib,
+        gia: annualGiaContrib,
+        pension: annualLockedContribution,
+      };
+    }
+
+    return buckets.reduce((acc, bucket) => {
+      if (bucket.isHidden) return acc;
+
+      const monthly = Math.max(0, clampNumber(bucket.monthly));
+      if (monthly <= 0) return acc;
+
+      const effectiveStopAge = bucket.stopContributingAge;
+      if (effectiveStopAge && age >= effectiveStopAge) return acc;
+
+      const effectiveWithdrawAge = bucket.startWithdrawalAge;
+      if (effectiveWithdrawAge && age >= effectiveWithdrawAge) return acc;
+
+      const annual = monthly * 12;
+      const type = bucket.type.toLowerCase();
+
+      if (type === 'lisa') {
+        if (age < 50) {
+          acc.isa += annual * 1.25;
+        }
+        return acc;
+      }
+
+      if (type === 'cash') acc.cash += annual;
+      else if (type === 'isa') acc.isa += annual;
+      else if (type === 'gia') acc.gia += annual;
+      else if (type.includes('pension')) acc.pension += annual;
+
+      return acc;
+    }, { cash: 0, isa: 0, gia: 0, pension: 0 });
+  };
 
   for (const b of buckets) {
     const t = b.type.toLowerCase();
@@ -999,60 +1081,86 @@ export function generatePotGrowthTable(
   const startAge = Math.ceil(currentAge);
 
   for (let age = startAge; age <= endAge; age++) {
-    // Determine phase
     const effectiveCoastAge = coastFireAge > 0 ? Math.floor(coastFireAge) : Infinity;
     const phase: PotGrowthRow['phase'] =
       age <= effectiveCoastAge ? 'accumulation'
       : age < retirementAge   ? 'coasting'
       : 'drawdown';
 
-    // 1. Apply growth to all pots first
     cashBalance    *= growthFactor;
     isaBalance     *= growthFactor;
     giaBalance     *= growthFactor;
     pensionBalance *= growthFactor;
 
-    // 2. Add contributions if still accumulating
     if (phase === 'accumulation') {
-      isaBalance     += annualIsaContrib;
-      cashBalance    += annualCashContrib;
-      giaBalance     += annualGiaContrib;
-      pensionBalance += annualLockedContribution;
+      const contributions = annualPotContributionsForAge(age);
+      isaBalance     += contributions.isa;
+      cashBalance    += contributions.cash;
+      giaBalance     += contributions.gia;
+      pensionBalance += contributions.pension;
     }
 
-    // 3. Handle withdrawals in drawdown phase
     let withdrawalAccessible = 0;
     let withdrawalPension = 0;
     let isShortfall = false;
 
     if (phase === 'drawdown') {
+      const pensionUnlockAge = Math.max(Math.floor(retirementAge), Math.floor(pensionAccessAge));
+      if (pensionTaxMethod === 'lump-sum' && age === pensionUnlockAge) {
+        const lumpSum = pensionBalance * 0.25;
+        pensionBalance -= lumpSum;
+        isaBalance += lumpSum;
+      }
+
       const accessibleNow = cashBalance + isaBalance + giaBalance;
       const pensionNow = pensionBalance;
       const pensionUnlocked = age >= pensionAccessAge;
+      const pensionTaxableFraction = (pensionTaxMethod === 'lump-sum' && age >= pensionUnlockAge) ? 1.0 : 0.75;
 
-      if (!pensionUnlocked) {
-        // Bridge phase: draw only from accessible
-        withdrawalAccessible = Math.min(annualNetExpenses, accessibleNow);
-        withdrawalPension = 0;
-        if (withdrawalAccessible < annualNetExpenses) isShortfall = true;
-      } else {
-        // Pension unlocked: draw proportionally from accessible and pension
-        const totalNow = accessibleNow + pensionNow;
-        if (totalNow > 0) {
-          const accessibleFrac = accessibleNow / totalNow;
-          withdrawalAccessible = annualNetExpenses * accessibleFrac;
-          withdrawalPension = annualNetExpenses * (1 - accessibleFrac);
-          // Clamp to available balances
-          withdrawalAccessible = Math.min(withdrawalAccessible, accessibleNow);
-          withdrawalPension = Math.min(withdrawalPension, pensionNow);
-          const totalWithdrawn = withdrawalAccessible + withdrawalPension;
-          if (totalWithdrawn < annualNetExpenses) isShortfall = true;
+      const taxOnPassive = calculateIncomeTax(passiveIncome, taxCode, 0, region).totalTax;
+      const netPassive = Math.max(0, passiveIncome - taxOnPassive);
+      const netToWithdraw = Math.max(0, annualExpenses - netPassive);
+
+      if (netToWithdraw > 0) {
+        if (!pensionUnlocked) {
+          withdrawalAccessible = Math.min(netToWithdraw, accessibleNow);
+          withdrawalPension = 0;
+          if (withdrawalAccessible < netToWithdraw) isShortfall = true;
         } else {
-          isShortfall = true;
+          const totalNow = accessibleNow + pensionNow;
+          if (totalNow > 0) {
+            const accessibleFrac = accessibleNow / totalNow;
+            const netFromAccessible = netToWithdraw * accessibleFrac;
+            withdrawalAccessible = Math.min(accessibleNow, netFromAccessible);
+
+            const netTarget = annualExpenses - passiveIncome - withdrawalAccessible;
+            const solved = solveGrossPensionWithdrawal(netTarget, passiveIncome, pensionTaxableFraction, taxCode, region);
+            let grossPension = solved.grossPension;
+
+            if (grossPension <= pensionNow) {
+              withdrawalPension = grossPension;
+            } else {
+              withdrawalPension = pensionNow;
+              const combinedTaxable = passiveIncome + pensionTaxableFraction * pensionNow;
+              const combinedTax = calculateIncomeTax(combinedTaxable, taxCode, 0, region).totalTax;
+              const netFromPensionAndPassive = pensionNow + passiveIncome - combinedTax;
+              const remainingNetNeeded = annualExpenses - netFromPensionAndPassive - withdrawalAccessible;
+
+              if (remainingNetNeeded > 0) {
+                const leftoverAccessible = accessibleNow - withdrawalAccessible;
+                const extraAccessible = Math.min(leftoverAccessible, remainingNetNeeded);
+                withdrawalAccessible += extraAccessible;
+                if (withdrawalAccessible + netFromPensionAndPassive < annualExpenses) {
+                  isShortfall = true;
+                }
+              }
+            }
+          } else {
+            isShortfall = true;
+          }
         }
       }
 
-      // Deduct withdrawals from pots (proportional split within accessible pots)
       if (withdrawalAccessible > 0 && accessibleNow > 0) {
         const accFrac = withdrawalAccessible / accessibleNow;
         cashBalance    -= cashBalance    * accFrac;
@@ -1061,7 +1169,6 @@ export function generatePotGrowthTable(
       }
       pensionBalance -= withdrawalPension;
 
-      // Guard against negatives
       cashBalance    = Math.max(0, cashBalance);
       isaBalance     = Math.max(0, isaBalance);
       giaBalance     = Math.max(0, giaBalance);
@@ -1435,3 +1542,185 @@ export function generateExcelPlanTable(
   return rows;
 }
 
+export function randomNormal(mean: number, stdDev: number): number {
+  let u = 0, v = 0;
+  while (u === 0) u = Math.random();
+  while (v === 0) v = Math.random();
+  const num = Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v);
+  return mean + stdDev * num;
+}
+
+export type MonteCarloResult = {
+  successRate: number;
+  medianPath: number[];
+  pessimisticPath: number[];
+  optimisticPath: number[];
+  ages: number[];
+};
+
+export function runMonteCarloSimulation(
+  cashAtRetire: number,
+  isaAtRetire: number,
+  giaAtRetire: number,
+  pensionAtRetire: number,
+  retirementAge: number,
+  endAge: number,
+  pensionAccessAge: number,
+  annualExpenses: number,
+  passiveIncome: number,
+  realGrowthMean: number,
+  volatility: number = 12,
+  taxCode: string = "1257L",
+  region: Region = "england-wales-ni",
+  pensionTaxMethod: 'ufpls' | 'lump-sum' = 'ufpls',
+  numSimulations: number = 1000
+): MonteCarloResult {
+  const ages: number[] = [];
+  const startAge = Math.floor(retirementAge);
+  for (let a = startAge; a <= endAge; a++) {
+    ages.push(a);
+  }
+
+  const paths: number[][] = [];
+  let successCount = 0;
+
+  for (let sim = 0; sim < numSimulations; sim++) {
+    let cash = cashAtRetire;
+    let isa = isaAtRetire;
+    let gia = giaAtRetire;
+    let pension = pensionAtRetire;
+    let isDepleted = false;
+    const path: number[] = [];
+
+    for (let age = startAge; age <= endAge; age++) {
+      const total = cash + isa + gia + pension;
+      path.push(total);
+
+      if (isDepleted) {
+        continue;
+      }
+
+      // Generate random annual real growth rate for this year
+      const randGrowth = randomNormal(realGrowthMean, volatility);
+      const growthFactor = 1 + (randGrowth / 100);
+
+      // Apply growth
+      cash *= growthFactor;
+      isa *= growthFactor;
+      gia *= growthFactor;
+      pension *= growthFactor;
+
+      // Handle lump sum transfer if it's the unlock year
+      const pensionUnlockAge = Math.max(Math.floor(retirementAge), Math.floor(pensionAccessAge));
+      if (pensionTaxMethod === 'lump-sum' && age === pensionUnlockAge) {
+        const lumpSum = pension * 0.25;
+        pension -= lumpSum;
+        isa += lumpSum;
+      }
+
+      const accessibleNow = cash + isa + gia;
+      const pensionNow = pension;
+      const pensionUnlocked = age >= pensionAccessAge;
+      const pensionTaxableFraction = (pensionTaxMethod === 'lump-sum' && age >= pensionUnlockAge) ? 1.0 : 0.75;
+
+      const taxOnPassive = calculateIncomeTax(passiveIncome, taxCode, 0, region).totalTax;
+      const netPassive = Math.max(0, passiveIncome - taxOnPassive);
+      const netToWithdraw = Math.max(0, annualExpenses - netPassive);
+
+      let withdrawalAccessible = 0;
+      let withdrawalPension = 0;
+
+      if (netToWithdraw > 0) {
+        if (!pensionUnlocked) {
+          withdrawalAccessible = Math.min(netToWithdraw, accessibleNow);
+          if (withdrawalAccessible < netToWithdraw) {
+            isDepleted = true;
+          }
+        } else {
+          const totalNow = accessibleNow + pensionNow;
+          if (totalNow > 0) {
+            const accessibleFrac = accessibleNow / totalNow;
+            const netFromAccessible = netToWithdraw * accessibleFrac;
+            withdrawalAccessible = Math.min(accessibleNow, netFromAccessible);
+
+            const netTarget = annualExpenses - passiveIncome - withdrawalAccessible;
+            const solved = solveGrossPensionWithdrawal(netTarget, passiveIncome, pensionTaxableFraction, taxCode, region);
+            let grossPension = solved.grossPension;
+
+            if (grossPension <= pensionNow) {
+              withdrawalPension = grossPension;
+            } else {
+              withdrawalPension = pensionNow;
+              const combinedTaxable = passiveIncome + pensionTaxableFraction * pensionNow;
+              const combinedTax = calculateIncomeTax(combinedTaxable, taxCode, 0, region).totalTax;
+              const netFromPensionAndPassive = pensionNow + passiveIncome - combinedTax;
+              const remainingNetNeeded = annualExpenses - netFromPensionAndPassive - withdrawalAccessible;
+
+              if (remainingNetNeeded > 0) {
+                const leftoverAccessible = accessibleNow - withdrawalAccessible;
+                const extraAccessible = Math.min(leftoverAccessible, remainingNetNeeded);
+                withdrawalAccessible += extraAccessible;
+                if (withdrawalAccessible + netFromPensionAndPassive < annualExpenses) {
+                  isDepleted = true;
+                }
+              }
+            }
+          } else {
+            isDepleted = true;
+          }
+        }
+      }
+
+      if (isDepleted) {
+        cash = 0;
+        isa = 0;
+        gia = 0;
+        pension = 0;
+      } else {
+        if (withdrawalAccessible > 0 && accessibleNow > 0) {
+          const accFrac = withdrawalAccessible / accessibleNow;
+          cash -= cash * accFrac;
+          isa -= isa * accFrac;
+          gia -= gia * accFrac;
+        }
+        pension -= withdrawalPension;
+
+        cash = Math.max(0, cash);
+        isa = Math.max(0, isa);
+        gia = Math.max(0, gia);
+        pension = Math.max(0, pension);
+      }
+    }
+
+    if (!isDepleted && (cash + isa + gia + pension) > 0) {
+      successCount++;
+    }
+    paths.push(path);
+  }
+
+  const medianPath: number[] = [];
+  const pessimisticPath: number[] = [];
+  const optimisticPath: number[] = [];
+
+  const numAges = ages.length;
+  for (let ageIdx = 0; ageIdx < numAges; ageIdx++) {
+    const valuesAtAge = paths.map(path => path[ageIdx] || 0);
+    valuesAtAge.sort((a, b) => a - b);
+
+    const idx10 = Math.floor(numSimulations * 0.1);
+    const idx50 = Math.floor(numSimulations * 0.5);
+    const idx90 = Math.floor(numSimulations * 0.9);
+
+    pessimisticPath.push(valuesAtAge[idx10]);
+    medianPath.push(valuesAtAge[idx50]);
+    optimisticPath.push(valuesAtAge[idx90]);
+  }
+
+  return {
+    successRate: (successCount / numSimulations) * 100,
+    medianPath,
+    pessimisticPath,
+    optimisticPath,
+    ages
+  };
+}
