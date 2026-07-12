@@ -329,7 +329,7 @@ function App() {
   const [savings, setSavings] = useState(initialSavings);
   const [assets, setAssets] = useState<Asset[]>([]);
   const [projectionYears, setProjectionYears] = useState(10);
-  const [mortgages, setMortgages] = useState<MortgageInputs[]>([{ amount: 0, annualRate: 4, years: 25, monthlyOverpayment: 0, oneOffMonth: 0, oneOffAmount: 0 }]);
+  const [mortgages, setMortgages] = useState<MortgageInputs[]>([{ amount: 0, annualRate: 4, years: 25, monthlyOverpayment: 0, oneOffMonth: 0, oneOffAmount: 0, paymentDay: 1 }]);
 
   const [birthYear, setBirthYear] = useState(1990);
   const [birthMonth, setBirthMonth] = useState(1);
@@ -363,7 +363,7 @@ function App() {
   }, [hasMortgages, showMortgageCard]);
 
   const addDefaultMortgage = () => {
-    setMortgages([{ amount: 200000, annualRate: 4, years: 25, monthlyOverpayment: 0, oneOffMonth: 0, oneOffAmount: 0 }]);
+    setMortgages([{ amount: 200000, annualRate: 4, years: 25, monthlyOverpayment: 0, oneOffMonth: 0, oneOffAmount: 0, paymentDay: 1 }]);
     setShowMortgageCard(true);
   };
 
@@ -528,7 +528,7 @@ function App() {
       { id: uid(), label: "Council Tax", amount: 160, bucket: "housing", includeInRetirement: true },
       { id: uid(), label: "Energy", amount: 180, bucket: "housing", includeInRetirement: true }
     ]);
-    setMortgages([{ amount: 200000, annualRate: 4.2, years: 25, monthlyOverpayment: 0, oneOffMonth: 0, oneOffAmount: 0 }]);
+    setMortgages([{ amount: 200000, annualRate: 4.2, years: 25, monthlyOverpayment: 0, oneOffMonth: 0, oneOffAmount: 0, paymentDay: 1 }]);
     setExpectedOutgoings(2500);
     setDrawdownRate(4);
     setInflationRate(3);
@@ -2209,8 +2209,9 @@ function CoastFireSection({
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', margin: '6px 0', fontSize: '0.9rem' }}>
                     <span style={{ color: '#475569' }}>Phase years:</span>
-                    <strong style={{ color: '#1e293b' }}>{Math.max(0, excelCoastAge - currentAge)} building / {Math.max(0, excelRetirementAge - excelCoastAge)} coasting</strong>
-                  </div>
+<strong style={{ color: '#1e293b' }}>
+  {Math.max(0, excelCoastAge - currentAge).toFixed(2)} building / {Math.max(0, excelRetirementAge - excelCoastAge).toFixed(2)} coasting
+</strong>                  </div>
                 </div>
               </div>
 
@@ -2348,6 +2349,83 @@ function CoastFireSection({
   );
 }
 
+type RetirementSimulationRow = {
+  age: number;
+  expenses: number;
+  fixedGrossIncome: number;
+  taxPaid: number;
+  accessibleWithdrawal: number;
+  pensionWithdrawal: number;
+  netIncome: number;
+  shortfall: number;
+  accessiblePot: number;
+  lisaPot: number;
+  pensionPot: number;
+  totalPot: number;
+};
+
+type RetirementSimulationResult = {
+  rows: RetirementSimulationRow[];
+  firstShortfallAge: number | null;
+  finalAge: number;
+  finalPot: number;
+  totalTaxPaid: number;
+  startingAccessiblePot: number;
+  startingPensionPot: number;
+  startingLisaPot: number;
+};
+
+const DB_PENSION_TYPES = ['nhs-pension', 'civil-service-pension', 'teachers-pension', 'police-pension', 'firefighters-pension', 'armed-forces-pension', 'lgps-pension'];
+
+function dbAccrualRate(bucket: any) {
+  if (bucket.type === 'nhs-pension') {
+    const scheme = bucket.nhsScheme || bucket.dbScheme || "2015";
+    return scheme === "1995" ? 80 : scheme === "2008" ? 60 : 54;
+  }
+  if (bucket.type === 'civil-service-pension') {
+    const scheme = bucket.dbScheme || "alpha";
+    return scheme === "classic" ? 80 : (scheme === "premium" || scheme === "nuvos") ? 60 : 43.1;
+  }
+  if (bucket.type === 'teachers-pension') {
+    const scheme = bucket.dbScheme || "2015";
+    return (scheme === "classic" || scheme === "80th") ? 80 : scheme === "60th" ? 60 : 57;
+  }
+  if (bucket.type === 'police-pension') return 55.3;
+  if (bucket.type === 'firefighters-pension') return 59.7;
+  if (bucket.type === 'armed-forces-pension') return 47;
+  if (bucket.type === 'lgps-pension') return 49;
+  return 54;
+}
+
+function weightedRate(parts: { value: number; rate: number }[]) {
+  const total = parts.reduce((sum, part) => sum + Math.max(0, part.value), 0);
+  if (total <= 0) return 0;
+  return parts.reduce((sum, part) => sum + Math.max(0, part.value) * (clampNumber(part.rate) / 100), 0) / total;
+}
+
+function solveGrossPensionForNetTarget(
+  targetNet: number,
+  fixedGrossIncome: number,
+  fixedTaxableIncome: number,
+  accessibleWithdrawal: number,
+  taxCode: string,
+  region: any,
+  pensionTaxableFraction = 0.75
+) {
+  if (targetNet <= 0) return 0;
+
+  let low = 0;
+  let high = Math.max(100000, targetNet * 3);
+  for (let i = 0; i < 60; i++) {
+    const mid = (low + high) / 2;
+    const tax = calculateIncomeTax(fixedTaxableIncome + mid * pensionTaxableFraction, taxCode, 0, region).totalTax;
+    const net = fixedGrossIncome + accessibleWithdrawal + mid - tax;
+    if (net < targetNet) low = mid;
+    else high = mid;
+  }
+  return high;
+}
+
 function RetirementSection({
   birthYear,
   setBirthYear,
@@ -2446,239 +2524,187 @@ function RetirementSection({
 }) {
   const hasAnyLisa = projectedSavings.some((b: any) => b.type === 'lisa');
   const hasActiveLisa = projectedSavings.some((b: any) => b.type === 'lisa' && (drawdownSettings[b.id]?.enabled ?? true));
+  const currentAge = (new Date().getFullYear() - birthYear) + (new Date().getMonth() + 1 - birthMonth) / 12;
 
-  const targetGrossSummary = useMemo(() => {
-    const currentAge = (new Date().getFullYear() - birthYear) + (new Date().getMonth() + 1 - birthMonth) / 12;
-    // 1. Calculate Nominal Other Income Net (including DB Pensions)
-    let otherTaxable = 0;
-    let otherGross = 0;
-    let hasDbPensions = false;
+  const retirementSimulation = useMemo<RetirementSimulationResult>(() => {
+    const nonDbBuckets = projectedSavings.filter((bucket: any) => !bucket.isHidden && !DB_PENSION_TYPES.includes(bucket.type));
+    const accessibleParts: { value: number; rate: number }[] = [];
+    const lisaParts: { value: number; rate: number }[] = [];
+    const pensionParts: { value: number; rate: number }[] = [];
 
-    // A. Manual Other Income sources
-    otherIncome.forEach(item => {
-      const startAge = item.startAge || 0;
-      if (retirementAge >= startAge) {
-        let amount = item.amount;
-        if (item.isInflationLinked) {
-            // Apply inflation from current age to retirementAge
-            const years = Math.max(0, retirementAge - currentAge);
-            amount *= Math.pow(1 + (inflationRate / 100), years);
-        }
-        otherGross += amount * 12;
-        if (item.isTaxable) otherTaxable += amount * 12;
-      }
-    });
+    nonDbBuckets.forEach((bucket: any) => {
+      const value = Math.max(0, clampNumber(bucket.finalBalance ?? bucket.projected ?? 0));
+      if (value <= 0) return;
 
-    // B. Defined Benefit (DB) Pensions (NHS/Civil Service/Teachers/Police/Fire/AF/LGPS)
-    projectedSavings.forEach((bucket) => {
-      if (['nhs-pension', 'civil-service-pension', 'teachers-pension', 'police-pension', 'firefighters-pension', 'armed-forces-pension', 'lgps-pension'].includes(bucket.type)) {
-        const settings = drawdownSettings[bucket.id] || { rate: 4, lumpSumTaken: false, useStopAge: false, useWithdrawAge: false, stopAge: 60, withdrawAge: 60 };
-        const effectiveWithdrawAge = settings.useWithdrawAge ? settings.withdrawAge : (bucket.startWithdrawalAge || 67);
-        
-        // Only include if retirement age >= the age they start drawing this specific DB pension
-        if (isBucketAccessible(bucket.type, retirementAge, effectiveWithdrawAge)) {
-          hasDbPensions = true;
-          let salary = bucket.dbSalary || 0;
-          let baseYears = (bucket.dbYearsService || 0);
-          const effectiveStopAge = settings.useStopAge ? settings.stopAge : (bucket.stopContributingAge || 0);
-          const currentAgeVal = (new Date().getFullYear() - birthYear) + (new Date().getMonth() + 1 - birthMonth) / 12;
-          let yearsUntilStop = effectiveStopAge ? Math.max(0, effectiveStopAge - (birthYear + (currentAgeVal))) : projectionYears;
-          let yearsAtRetirement = baseYears + Math.min(projectionYears, yearsUntilStop);
-          let accrual = 54;
-
-          if (bucket.type === 'nhs-pension') {
-              salary = nhsJobsGross || bucket.nhsSalary || bucket.dbSalary || 0;
-              yearsAtRetirement = (bucket.nhsYearsService || bucket.dbYearsService || 0) + Math.min(projectionYears, yearsUntilStop);
-              const scheme = bucket.nhsScheme || bucket.dbScheme || "2015";
-              accrual = scheme === "1995" ? 80 : scheme === "2008" ? 60 : 54;
-          } else if (bucket.type === 'civil-service-pension') {
-              salary = civilServiceJobsGross || bucket.dbSalary || 0;
-              const scheme = bucket.dbScheme || "alpha";
-              accrual = scheme === "classic" ? 80 : (scheme === "premium" || scheme === "nuvos") ? 60 : 43.1;
-          } else if (bucket.type === 'teachers-pension') {
-              salary = teachersJobsGross || bucket.dbSalary || 0;
-              const scheme = bucket.dbScheme || "2015";
-              accrual = (scheme === "classic" || scheme === "80th") ? 80 : scheme === "60th" ? 60 : 57;
-          } else if (bucket.type === 'police-pension') {
-              salary = policeJobsGross || bucket.dbSalary || 0;
-              accrual = 55.3;
-          } else if (bucket.type === 'firefighters-pension') {
-              salary = firefightersJobsGross || bucket.dbSalary || 0;
-              accrual = 59.7;
-          } else if (bucket.type === 'armed-forces-pension') {
-              salary = armedForcesJobsGross || bucket.dbSalary || 0;
-              accrual = 47;
-          } else if (bucket.type === 'lgps-pension') {
-              salary = lgpsJobsGross || bucket.dbSalary || 0;
-              accrual = 49;
-          }
-
-          let annualDbIncome = (salary / accrual) * yearsAtRetirement;
-          // Apply inflation to DB Pension (usually linked)
-          const years = Math.max(0, retirementAge - currentAge);
-          annualDbIncome *= Math.pow(1 + (inflationRate / 100), years);
-          
-          otherGross += annualDbIncome;
-          otherTaxable += annualDbIncome; // DB pensions are 100% taxable
-        }
-      }
-    });
-    
-    const otherTax = calculateIncomeTax(otherTaxable, taxSettings.taxCode, 0, taxSettings.region).totalTax;
-    const otherNet = otherGross - otherTax;
-    
-    // C. State Pension
-    let statePensionGross = 0;
-    if (includeStatePension && retirementAge >= statePensionAge) {
-      const years = Math.max(0, retirementAge - currentAge);
-      statePensionGross = annualStatePension * Math.pow(1 + (inflationRate / 100), years);
-    }
-    
-    // Recalculate "Other" including State Pension for gap analysis
-    const totalOtherGross = otherGross + statePensionGross;
-    const totalOtherTaxable = otherTaxable + statePensionGross;
-    const totalOtherTax = calculateIncomeTax(totalOtherTaxable, taxSettings.taxCode, 0, taxSettings.region).totalTax;
-    const totalOtherNet = totalOtherGross - totalOtherTax;
-
-    // 2. Calculate the Gap to fund from pots (now reduced by DB and State pensions)
-    const totalTargetNet = summary.futureMonthlyExpenses * 12;
-    const netGap = Math.max(0, totalTargetNet - totalOtherNet);
-    
-    const effectiveTaxableFraction = retirementAge >= pensionAccessAge ? taxableFraction : 0;
-
-    const res = calculateRetirementGrossRequired(
-      netGap,
-      effectiveTaxableFraction,
-      taxSettings.taxCode,
-      taxSettings.region,
-      totalOtherTaxable
-    );
-    
-    // Calculate required pots based on drawdownRate
-    const rateDecimal = Math.max(0.0001, drawdownRate / 100);
-    const requiredPensionPot = res.grossPension / rateDecimal;
-    const requiredIsaPot = res.netFromNonTaxable / rateDecimal;
-    
-    return { 
-      ...res, 
-      requiredPensionPot, 
-      requiredIsaPot, 
-      otherNet: totalOtherNet, 
-      otherGross: totalOtherGross, 
-      otherTax: totalOtherTax, 
-      otherTaxable: totalOtherTaxable, 
-      netGap, 
-      totalTargetNet, 
-      hasDbPensions,
-      statePensionGross,
-      dbGross: 0, // Need to track this separately in the loop
-      manualGross: otherGross // This will need to be correctly split
-    };
-  }, [summary.futureMonthlyExpenses, taxableFraction, taxSettings, drawdownRate, otherIncome, retirementAge, pensionAccessAge, projectedSavings, drawdownSettings, isBucketAccessible, birthYear, birthMonth, projectionYears, nhsJobsGross, civilServiceJobsGross, teachersJobsGross, includeStatePension, annualStatePension, statePensionAge]);
-
-  const actualProjectedTotals = useMemo(() => {
-    let lisaPenaltyTotal = 0;
-    const totals = projectedSavings.reduce((acc, bucket) => {
-      if (bucket.isHidden) return acc;
-      let val = bucket.projected;
       if (bucket.type === 'lisa') {
-        if (retirementAge < 60) {
-          if (!showLisaUnder60) return acc; // Skip LISA if toggle is off
-          const penalty = val * 0.25;
-          lisaPenaltyTotal += penalty;
-          val = val - penalty;
-        }
+        lisaParts.push({ value, rate: bucket.annualRate });
+      } else if (bucket.type === 'pension' || bucket.type === 'workplace-private-pension' || bucket.type === 'workplace-pension') {
+        pensionParts.push({ value, rate: bucket.annualRate });
+      } else {
+        accessibleParts.push({ value, rate: bucket.annualRate });
       }
+    });
 
-      if (['pension', 'workplace-private-pension'].includes(bucket.type)) {
-        acc.pension += val;
-      } else if (['isa', 'lisa', 'cash'].includes(bucket.type)) {
-        acc.isaCash += val;
-      }
-      return acc;
-    }, { pension: 0, isaCash: 0 });
-    
-    return { ...totals, lisaPenaltyTotal };
-  }, [projectedSavings, retirementAge, showLisaUnder60]);
+    let accessiblePot = accessibleParts.reduce((sum, part) => sum + part.value, 0);
+    let lisaPot = lisaParts.reduce((sum, part) => sum + part.value, 0);
+    let pensionPot = pensionParts.reduce((sum, part) => sum + part.value, 0);
+    const accessibleGrowth = weightedRate(accessibleParts);
+    const lisaGrowth = weightedRate(lisaParts);
+    const pensionGrowth = weightedRate(pensionParts);
 
-  const { pensionSurplus, isaSurplus, totalNetShortfall, incomeBreakdown } = useMemo(() => {
-    const pSurplus = actualProjectedTotals.pension - targetGrossSummary.requiredPensionPot;
-    const iSurplus = actualProjectedTotals.isaCash - targetGrossSummary.requiredIsaPot;
-    
-    // 1. Fixed Income (Net)
-    // We separate State Pension for clarity
-    const statePensionNetMonthly = (targetGrossSummary.statePensionGross / 12) * 0.8; // Rough 20% tax estimation
-    
-    // Separate DB vs Manual
-    const dbNetMonthly = (targetGrossSummary.dbGross / 12) * 0.8;
-    const otherManualNetMonthly = (targetGrossSummary.manualGross / 12) * 0.8;
+    const startingAccessiblePot = accessiblePot;
+    const startingLisaPot = lisaPot;
+    const startingPensionPot = pensionPot;
+    const endAge = Math.max(95, Math.ceil(retirementAge) + 35, statePensionAge + 20);
+    const rows: RetirementSimulationRow[] = [];
+    let firstShortfallAge: number | null = null;
+    let totalTaxPaid = 0;
 
-    // 2. Income from Pots (Net)
-    // We drawdown from what we HAVE, up to what is REQUIRED.
-    const pDrawdownGross = Math.min(actualProjectedTotals.pension, targetGrossSummary.requiredPensionPot) * (drawdownRate / 100);
-    const pDrawdownNet = (pDrawdownGross * 0.25) + (pDrawdownGross * 0.75 * 0.8); // Simple 20% tax estimation for tooltip
-    
-    const iDrawdownNet = Math.min(actualProjectedTotals.isaCash, targetGrossSummary.requiredIsaPot) * (drawdownRate / 100);
+    const dbAnnualAtAge = (bucket: any, age: number) => {
+      const settings = drawdownSettings[bucket.id] || {};
+      const withdrawAge = settings.useWithdrawAge ? settings.withdrawAge : (bucket.startWithdrawalAge || 67);
+      if (age < withdrawAge) return 0;
 
-    // 3. Calculate the actual net shortfall
-    // Pension Gap: 25% tax-free, 75% taxable
-    const pGrossGap = Math.max(0, -pSurplus) * (drawdownRate / 100);
-    const pNetGap = (pGrossGap * 0.25) + (pGrossGap * 0.75 * 0.8); 
-    
-    // ISA Gap: 100% tax-free
-    const iNetGap = Math.max(0, -iSurplus) * (drawdownRate / 100);
-    
-    const monthlyNetShortfall = (pNetGap + iNetGap) / 12;
+      const salary = bucket.type === 'nhs-pension' ? (nhsJobsGross || bucket.nhsSalary || bucket.dbSalary || 0)
+        : bucket.type === 'civil-service-pension' ? (civilServiceJobsGross || bucket.dbSalary || 0)
+        : bucket.type === 'teachers-pension' ? (teachersJobsGross || bucket.dbSalary || 0)
+        : bucket.type === 'police-pension' ? (policeJobsGross || bucket.dbSalary || 0)
+        : bucket.type === 'firefighters-pension' ? (firefightersJobsGross || bucket.dbSalary || 0)
+        : bucket.type === 'armed-forces-pension' ? (armedForcesJobsGross || bucket.dbSalary || 0)
+        : bucket.type === 'lgps-pension' ? (lgpsJobsGross || bucket.dbSalary || 0)
+        : (bucket.dbSalary || 0);
 
-    return { 
-      pensionSurplus: pSurplus, 
-      isaSurplus: iSurplus, 
-      totalNetShortfall: monthlyNetShortfall,
-      incomeBreakdown: {
-        statePensionNet: statePensionNetMonthly,
-        dbNet: dbNetMonthly,
-        otherManualNet: otherManualNetMonthly,
-        pDrawdownNet: pDrawdownNet / 12,
-        iDrawdownNet: iDrawdownNet / 12,
-        shortfall: monthlyNetShortfall,
-        target: targetGrossSummary.totalTargetNet / 12
-      }
+      const baseYears = bucket.type === 'nhs-pension'
+        ? (bucket.nhsYearsService || bucket.dbYearsService || 0)
+        : (bucket.dbYearsService || 0);
+      const stopAge = settings.useStopAge ? settings.stopAge : bucket.stopContributingAge;
+      const serviceYears = baseYears + Math.max(0, Math.min(retirementAge, stopAge || retirementAge) - currentAge);
+      const annual = salary > 0 ? (salary / dbAccrualRate(bucket)) * serviceYears : 0;
+      return annual * Math.pow(1 + inflationRate / 100, Math.max(0, age - currentAge));
     };
-  }, [actualProjectedTotals, targetGrossSummary, drawdownRate]);
 
-  const grossEarningsNeeded = useMemo(() => {
-    if (totalNetShortfall <= 0.01 || Number.isNaN(totalNetShortfall)) return 0;
-    
-    // We need to find how much GROSS is required to get totalNetShortfall NET, 
-    // but we must account for the fact that we already have otherTaxable income 
-    // filling up the personal allowance and tax bands.
-    
-    const baselineTaxableAnnual = targetGrossSummary.otherTaxable || 0;
-    const targetNetAnnual = totalNetShortfall * 12;
+    for (let age = Math.ceil(retirementAge); age <= endAge; age++) {
+      const yearsFromNow = Math.max(0, age - currentAge);
+      const expenses = summary.currentMonthlyExpenses * 12 * Math.pow(1 + inflationRate / 100, yearsFromNow);
 
-    // Solve for extra gross G such that:
-    // Net(baseline + G) - Net(baseline) = targetNetAnnual
-    const baselineNet = baselineTaxableAnnual - calculateIncomeTax(baselineTaxableAnnual, taxSettings.taxCode, 0, taxSettings.region).totalTax;
-    
+      let fixedGrossIncome = 0;
+      let fixedTaxableIncome = 0;
+
+      otherIncome.forEach((item) => {
+        const startAge = item.startAge || retirementAge;
+        if (age < startAge) return;
+        const annual = (item.amount || 0) * 12 * (item.isInflationLinked ? Math.pow(1 + inflationRate / 100, yearsFromNow) : 1);
+        fixedGrossIncome += annual;
+        if (item.isTaxable) fixedTaxableIncome += annual;
+      });
+
+      projectedSavings.forEach((bucket: any) => {
+        if (!bucket.isHidden && DB_PENSION_TYPES.includes(bucket.type)) {
+          const annual = dbAnnualAtAge(bucket, age);
+          fixedGrossIncome += annual;
+          fixedTaxableIncome += annual;
+        }
+      });
+
+      if (includeStatePension && age >= statePensionAge) {
+        const annual = annualStatePension * Math.pow(1 + inflationRate / 100, yearsFromNow);
+        fixedGrossIncome += annual;
+        fixedTaxableIncome += annual;
+      }
+
+      const baselineTax = calculateIncomeTax(fixedTaxableIncome, taxSettings.taxCode, 0, taxSettings.region).totalTax;
+      const fixedNetIncome = fixedGrossIncome - baselineTax;
+      let netNeededFromPots = Math.max(0, expenses - fixedNetIncome);
+      let accessibleWithdrawal = 0;
+      let pensionWithdrawal = 0;
+      let lisaWithdrawal = 0;
+
+      const lisaCanBeUsed = age >= 60 || showLisaUnder60;
+      const usableLisaValue = lisaCanBeUsed ? lisaPot * (age < 60 ? 0.75 : 1) : 0;
+      let availableAccessibleValue = accessiblePot + usableLisaValue;
+
+      if (netNeededFromPots > 0 && availableAccessibleValue > 0) {
+        accessibleWithdrawal = Math.min(netNeededFromPots, availableAccessibleValue);
+        const fromAccessible = Math.min(accessiblePot, accessibleWithdrawal);
+        accessiblePot -= fromAccessible;
+        const remainingFromLisaValue = accessibleWithdrawal - fromAccessible;
+        if (remainingFromLisaValue > 0) {
+          const lisaReduction = age < 60 ? remainingFromLisaValue / 0.75 : remainingFromLisaValue;
+          lisaWithdrawal = remainingFromLisaValue;
+          lisaPot = Math.max(0, lisaPot - lisaReduction);
+        }
+        netNeededFromPots -= accessibleWithdrawal;
+      }
+
+      if (netNeededFromPots > 0 && age >= pensionAccessAge && pensionPot > 0) {
+        const grossNeeded = solveGrossPensionForNetTarget(
+          expenses,
+          fixedGrossIncome,
+          fixedTaxableIncome,
+          accessibleWithdrawal,
+          taxSettings.taxCode,
+          taxSettings.region
+        );
+        pensionWithdrawal = Math.min(pensionPot, grossNeeded);
+        pensionPot -= pensionWithdrawal;
+      }
+
+      const taxablePension = pensionWithdrawal * 0.75;
+      const taxPaid = calculateIncomeTax(fixedTaxableIncome + taxablePension, taxSettings.taxCode, 0, taxSettings.region).totalTax;
+      totalTaxPaid += taxPaid;
+      const netIncome = fixedGrossIncome + accessibleWithdrawal + pensionWithdrawal - taxPaid;
+      const shortfall = Math.max(0, expenses - netIncome);
+      if (shortfall > 1 && firstShortfallAge === null) firstShortfallAge = age;
+
+      rows.push({
+        age,
+        expenses,
+        fixedGrossIncome,
+        taxPaid,
+        accessibleWithdrawal: accessibleWithdrawal - lisaWithdrawal,
+        pensionWithdrawal,
+        netIncome,
+        shortfall,
+        accessiblePot,
+        lisaPot,
+        pensionPot,
+        totalPot: accessiblePot + lisaPot + pensionPot,
+      });
+
+      accessiblePot *= 1 + accessibleGrowth;
+      lisaPot *= 1 + lisaGrowth;
+      pensionPot *= 1 + pensionGrowth;
+    }
+
+    const lastRow = rows[rows.length - 1];
+    return {
+      rows,
+      firstShortfallAge,
+      finalAge: endAge,
+      finalPot: lastRow?.totalPot || 0,
+      totalTaxPaid,
+      startingAccessiblePot,
+      startingPensionPot,
+      startingLisaPot,
+    };
+  }, [projectedSavings, drawdownSettings, retirementAge, statePensionAge, pensionAccessAge, showLisaUnder60, summary.currentMonthlyExpenses, inflationRate, otherIncome, includeStatePension, annualStatePension, taxSettings, currentAge, nhsJobsGross, civilServiceJobsGross, teachersJobsGross, policeJobsGross, firefightersJobsGross, armedForcesJobsGross, lgpsJobsGross]);
+
+  const firstRetirementRow = retirementSimulation.rows[0];
+  const retirementStatusCovered = retirementSimulation.firstShortfallAge === null;
+  const firstYearShortfall = firstRetirementRow?.shortfall || 0;
+  const firstYearGrossNeeded = useMemo(() => {
+    if (firstYearShortfall <= 1) return 0;
     let low = 0;
-    let high = Math.max(100000, targetNetAnnual * 3);
+    let high = Math.max(100000, firstYearShortfall * 3);
     for (let i = 0; i < 60; i++) {
       const mid = (low + high) / 2;
-      const totalTaxable = baselineTaxableAnnual + mid;
-      const tax = calculateIncomeTax(totalTaxable, taxSettings.taxCode, 0, taxSettings.region).totalTax;
-      
-      // NI is only on the EARNED portion (mid), not the combined pension+earned total.
-      const ni = calculateNationalInsurance(mid, "class1"); 
-      
-      const currentNet = totalTaxable - tax - ni;
-      const extraNet = currentNet - baselineNet;
-
-      if (extraNet < targetNetAnnual) low = mid;
+      const tax = calculateIncomeTax(mid, taxSettings.taxCode, 0, taxSettings.region).totalTax;
+      const ni = calculateNationalInsurance(mid, "class1");
+      if (mid - tax - ni < firstYearShortfall) low = mid;
       else high = mid;
     }
-    
     return high / 12;
-  }, [totalNetShortfall, targetGrossSummary.otherTaxable, taxSettings]);
+  }, [firstYearShortfall, taxSettings]);
 
   return (
     <div className="workspace">
@@ -2794,127 +2820,54 @@ function RetirementSection({
               ]} />
               
               <div style={{ marginTop: '16px', paddingTop: '16px', borderTop: '1px dashed #ccc' }}>
-                  {retirementAge >= pensionAccessAge && (
-                    <>
-                      <div className="funding-split-container" style={{ display: 'flex', alignItems: 'center', gap: '20px', marginBottom: '16px', flexWrap: 'wrap' }}>
-                        <span style={{ fontSize: '0.85rem', color: '#666', fontWeight: 600, minWidth: '90px' }}>Funding Split:</span>
-                        <div style={{ flex: '1 1 300px', display: 'flex', alignItems: 'center', gap: '12px' }}>
-                          <div style={{ flex: 1, position: 'relative' }}>
-                            <input 
-                              type="range" min="0" max="1" step="0.01" 
-                              className="split-slider" 
-                              value={taxableFraction} 
-                              onChange={e => setTaxableFraction(Number(e.target.value))} 
-                              style={{ '--split-percent': `${taxableFraction * 100}%` } as any}
-                            />
-                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.65rem', fontWeight: 800, marginTop: '4px' }}>
-                              <span className="pension-text">PENSION (TAXABLE)</span>
-                              <span className="isa-text">ISA / CASH (TAX FREE)</span>
-                            </div>
-                          </div>
-                          <div style={{ width: '80px' }}>
-                            <NumberInput 
-                              value={Math.round(taxableFraction * 100)} 
-                              onChange={(v) => setTaxableFraction(clampNumber(v, 0) / 100)} 
-                              suffix="%" 
-                            />
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="notice" style={{ maxWidth: 'none', fontSize: '0.75rem', marginBottom: '12px' }}>
-                        Taxable portion assumes 25% tax-free (Pension rules). Non-taxable assumes 0% tax (ISA/Cash).
-                      </div>
-                    </>
-                  )}
+                  <div className="notice" style={{ maxWidth: 'none', fontSize: '0.75rem', marginBottom: '12px' }}>
+                    This now simulates retirement year by year: taxable income, state/DB/manual income, accessible bridge money, pension access, pension tax, and the first year a shortfall appears.
+                  </div>
 
                   <ResultRows rows={[
-                    ["Target Annual Net", targetGrossSummary.totalTargetNet],
-                    [
-                      <span key="other-label" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                        Other Income Net
-                        <span className="tooltip-trigger" data-tooltip={`Includes manual income sources${targetGrossSummary.hasDbPensions ? ' and your Defined Benefit pensions (NHS/CS/Teachers)' : ''} that reduce your funding gap.`}>
-                          ⓘ
-                        </span>
-                      </span> as any,
-                      -targetGrossSummary.otherNet
-                    ],
-                    [
-                      <span key="gap-label" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                        Net Gap to Fund
-                        <span className="tooltip-trigger" data-tooltip={`To fund this ${money.format(targetGrossSummary.netGap)} gap at your chosen ${drawdownRate}% drawdown rate, the following pots are required.`}>
-                          ⓘ
-                        </span>
-                      </span> as any,
-                      targetGrossSummary.netGap
-                    ],
-                    [
-                      <span key="gross-label" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                        Required Annual Gross Withdrawal
-                        <span className="tooltip-trigger" data-tooltip="The total gross amount you need to withdraw from your pots to reach your target net, after accounting for tax and any other income sources.">
-                          ⓘ
-                        </span>
-                      </span> as any, 
-                      targetGrossSummary.totalGrossAnnual
-                    ],
-                    ["Estimated Annual Tax on Pots", -targetGrossSummary.totalAnnualTaxOnPots],
+                    ["First-Year Target Net", firstRetirementRow?.expenses || 0],
+                    ["Fixed Income Gross", -(firstRetirementRow?.fixedGrossIncome || 0)],
+                    ["Tax Paid", -(firstRetirementRow?.taxPaid || 0)],
+                    ["Accessible Pot Withdrawal", firstRetirementRow?.accessibleWithdrawal || 0],
+                    ["Pension Gross Withdrawal", firstRetirementRow?.pensionWithdrawal || 0],
+                    ["First-Year Shortfall", firstRetirementRow?.shortfall || 0],
                   ]} />
                   
                   <div className="retirement-comparison-grid">
-                    {retirementAge >= pensionAccessAge ? (
-                        <div className={`metric pension-card ${pensionSurplus >= 0 ? 'green' : 'red'}`} style={{ minHeight: 'auto', padding: '12px' }}>
+                        <div className={`metric ${retirementStatusCovered ? 'green' : 'red'}`} style={{ minHeight: 'auto', padding: '12px' }}>
                           <span style={{ fontSize: '0.75rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                            Projected Pension Pot
-                            <span className="tooltip-trigger" data-tooltip={`Based on your ${drawdownRate}% drawdown rate, a target of ${money.format(targetGrossSummary.requiredPensionPot)} will provide ${money.format(targetGrossSummary.requiredPensionPot * (drawdownRate / 100))} per year in retirement income.`}>
+                            Plan Status
+                            <span className="tooltip-trigger" data-tooltip={`Simulated annually from age ${Math.ceil(retirementAge)} to ${retirementSimulation.finalAge}.`}>
                               ⓘ
                             </span>
                           </span>
-                          <strong style={{ fontSize: '1.2rem' }}>{money.format(actualProjectedTotals.pension)}</strong>
+                          <strong style={{ fontSize: '1.2rem' }}>{retirementStatusCovered ? 'Covered' : `Shortfall age ${retirementSimulation.firstShortfallAge}`}</strong>
                           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '4px' }}>
-                            <small style={{ fontSize: '0.65rem', color: '#666' }}>Target: {money.format(targetGrossSummary.requiredPensionPot)}</small>
-                            <small style={{ fontSize: '0.7rem', fontWeight: 800 }}>
-                              {pensionSurplus >= 0 ? '+' : ''}{money.format(pensionSurplus)}
-                            </small>
+                            <small style={{ fontSize: '0.65rem', color: '#666' }}>Final pot at {retirementSimulation.finalAge}</small>
+                            <small style={{ fontSize: '0.7rem', fontWeight: 800 }}>{money.format(retirementSimulation.finalPot)}</small>
                           </div>
                         </div>
-                      ) : (
-                        <div className="metric" style={{ minHeight: 'auto', padding: '12px', background: '#fff1f0', borderColor: '#f5d3d1', display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: '4px' }}>
-                          <span style={{ fontSize: '0.75rem', fontWeight: 800, color: '#a7332f' }}>⚠️ Pension Inaccessible</span>
-                          <small style={{ fontSize: '0.65rem', color: '#666', lineHeight: '1.2' }}>
-                            Retiring at {retirementAge.toFixed(1)} is below private pension age ({pensionAccessAge}).
-                          </small>
-                        </div>
-                      )}                      <div className={`metric isa-card ${isaSurplus >= 0 ? 'green' : 'red'}`} style={{ minHeight: 'auto', padding: '12px' }}>
+                      <div className="metric isa-card green" style={{ minHeight: 'auto', padding: '12px' }}>
                         <span style={{ fontSize: '0.75rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                          Projected ISA/Cash Pot
-                          <span className="tooltip-trigger" data-tooltip={`Based on your ${drawdownRate}% drawdown rate, a target of ${money.format(targetGrossSummary.requiredIsaPot)} will provide ${money.format(targetGrossSummary.requiredIsaPot * (drawdownRate / 100))} per year in retirement income.`}>
-                            ⓘ
-                          </span>
-                          {actualProjectedTotals.lisaPenaltyTotal > 0 && (
-                            <small style={{ color: '#a7332f', fontWeight: 800, fontSize: '0.6rem' }}>
-                              LISA PENALTY: -{money.format(actualProjectedTotals.lisaPenaltyTotal)}
-                            </small>
-                          )}
+                          Starting Accessible/LISA
                         </span>
-                        <strong style={{ fontSize: '1.2rem' }}>{money.format(actualProjectedTotals.isaCash)}</strong>
+                        <strong style={{ fontSize: '1.2rem' }}>{money.format(retirementSimulation.startingAccessiblePot + retirementSimulation.startingLisaPot)}</strong>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '4px' }}>
-                          <small style={{ fontSize: '0.65rem', color: '#666' }}>Target: {money.format(targetGrossSummary.requiredIsaPot)}</small>
-                          <small style={{ fontSize: '0.7rem', fontWeight: 800 }}>
-                            {isaSurplus >= 0 ? '+' : ''}{money.format(isaSurplus)}
-                          </small>
+                          <small style={{ fontSize: '0.65rem', color: '#666' }}>LISA unlocks at age 60 unless early use is enabled</small>
                         </div>
                       </div>
-                      <div className={`metric ${grossEarningsNeeded > 0 ? 'red' : 'green'}`} style={{ minHeight: 'auto', padding: '12px' }}>
+                      <div className={`metric ${firstYearGrossNeeded > 0 ? 'red' : 'green'}`} style={{ minHeight: 'auto', padding: '12px' }}>
                         <span style={{ fontSize: '0.75rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                           Monthly Gross Earnings Needed
-                          <span className="tooltip-trigger" data-tooltip={`Income Sources (Net Monthly):\n- State Pension: ${monthlyMoney.format(incomeBreakdown.statePensionNet)}\n- Defined Benefit (DB) Pensions: ${monthlyMoney.format(incomeBreakdown.dbNet)}\n- Other Income Sources: ${monthlyMoney.format(incomeBreakdown.otherManualNet)}\n- Pension Drawdown: ${monthlyMoney.format(incomeBreakdown.pDrawdownNet)}\n- ISA/Cash Drawdown: ${monthlyMoney.format(incomeBreakdown.iDrawdownNet)}\n-------------------\n- TOTAL NET INCOME: ${monthlyMoney.format(incomeBreakdown.statePensionNet + incomeBreakdown.dbNet + incomeBreakdown.otherManualNet + incomeBreakdown.pDrawdownNet + incomeBreakdown.iDrawdownNet)}\n- TARGET: ${monthlyMoney.format(incomeBreakdown.target)}\n- NET SHORTFALL: ${monthlyMoney.format(incomeBreakdown.shortfall)}\n\nTo cover this shortfall, you need to earn approximately ${monthlyMoney.format(grossEarningsNeeded)} gross per month.`}>
+                          <span className="tooltip-trigger" data-tooltip={`Only shown when the first simulated retirement year has a net shortfall after using available pots and income.`}>
                             ⓘ
                           </span>
                         </span>
-                        <strong style={{ fontSize: '1.2rem' }}>{monthlyMoney.format(grossEarningsNeeded)}</strong>                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '4px' }}>
-                          <small style={{ fontSize: '0.65rem', color: '#666' }}>Today's Money</small>
+                        <strong style={{ fontSize: '1.2rem' }}>{monthlyMoney.format(firstYearGrossNeeded)}</strong>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '4px' }}>
+                          <small style={{ fontSize: '0.65rem', color: '#666' }}>First simulated retirement year</small>
                           <small style={{ fontSize: '0.7rem', fontWeight: 800 }}>
-                            {grossEarningsNeeded > 0 ? 'SHORTFALL' : 'COVERED'}
+                            {firstYearGrossNeeded > 0 ? 'SHORTFALL' : 'COVERED'}
                           </small>
                         </div>
                       </div>
@@ -3073,20 +3026,20 @@ function RetirementSection({
       </section>
 
       <section className="panel span-6">
-        <h2>Post-Retirement Income Summary</h2>
+        <h2>Simulated Retirement Summary</h2>
         <ResultRows rows={[
-          ["Monthly Net (Nominal)", summary.monthlyIn],
-          ["Monthly Net (Today's Money)", summary.realMonthlyIn],
-          ["Future Monthly Costs", -summary.futureMonthlyExpenses],
-          ["Monthly Surplus (Future)", summary.surplus],
-          ["Real Surplus (Today's Money)", summary.realSurplus],
+          ["First-Year Net Income", (firstRetirementRow?.netIncome || 0) / 12],
+          ["First-Year Costs", -(firstRetirementRow?.expenses || 0) / 12],
+          ["First-Year Shortfall", -(firstRetirementRow?.shortfall || 0) / 12],
+          ["Final Pot", retirementSimulation.finalPot],
+          ["Total Tax Paid in Simulation", -retirementSimulation.totalTaxPaid],
         ]} />
         <div style={{ marginTop: '16px', fontSize: '0.85rem', color: '#666', borderTop: '1px solid #eee', paddingTop: '12px' }}>
-            <p><strong>Note:</strong> "Today's Money" accounts for your assumed {inflationRate}% inflation over {projectionYears.toFixed(2)} years.</p>
+            <p><strong>Note:</strong> This uses the annual simulation from age {Math.ceil(retirementAge)} to {retirementSimulation.finalAge}, including pension-access timing, taxable pension withdrawals, state/DB/manual income, and selected retirement costs.</p>
         </div>
         {hasActiveLisa && retirementAge < 60 && showLisaUnder60 && (
           <p style={{color: '#a7332f', fontSize: '0.85rem', marginTop: '10px', fontWeight: 600}}>
-            * LISA 25% penalty applied: -{money.format(actualProjectedTotals.lisaPenaltyTotal)} total reduction.
+            * Early LISA use applies a 25% withdrawal penalty in the simulation.
           </p>
         )}
         {hasActiveLisa && retirementAge < 60 && !showLisaUnder60 && (
@@ -3098,11 +3051,7 @@ function RetirementSection({
 
       <section className="panel span-6">
         <DepletionChart 
-          projectedSavings={projectedSavings} 
-          drawdownSettings={drawdownSettings} 
-          retirementAge={retirementAge} 
-          pensionAccessAge={pensionAccessAge} 
-          inflationRate={inflationRate}
+          simulation={retirementSimulation}
         />
       </section>
     </div>
@@ -4289,13 +4238,31 @@ function WealthSummaryCard({ savings, mortgages = [], assets = [], currentAge }:
   );
 
   // Pie chart 2: Liquidity (Accessible vs Locked)
-  const liquidityChart = (
-    <svg viewBox="0 0 32 32" style={{ width: '60px', height: '60px', flexShrink: 0 }}>
-      <circle r="16" cx="16" cy="16" style={{ fill: '#ddebfa' }} />
-      <circle r="16" cx="16" cy="16" style={{ fill: '#27ae60', strokeWidth: 32, strokeDasharray: `${accessiblePct} 100`, strokeDashoffset: 0 }} />
-      <circle r="16" cx="16" cy="16" style={{ fill: 'transparent', stroke: '#c0392b', strokeWidth: 32, strokeDasharray: `${lockedPct} 100`, strokeDashoffset: -accessiblePct }} />
-    </svg>
-  );
+  // const liquidityChart = (
+  //   <svg viewBox="0 0 32 32" style={{ width: '60px', height: '60px', flexShrink: 0 }}>
+  //     <circle r="16" cx="16" cy="16" style={{ fill: '#ddebfa' }} />
+  //     <circle r="16" cx="16" cy="16" style={{ fill: '#27ae60', strokeWidth: 32, strokeDasharray: `${accessiblePct} 100`, strokeDashoffset: 0 }} />
+  //     <circle r="16" cx="16" cy="16" style={{ fill: 'transparent', stroke: '#c0392b', strokeWidth: 32, strokeDasharray: `${lockedPct} 100`, strokeDashoffset: -accessiblePct }} />
+  //   </svg>
+  // );
+
+  const accessibleAmount = 28848.25; // Swap with your actual variables
+const lockedAmount = 51587.90;     // Swap with your actual variables
+const totalAmount = accessibleAmount + lockedAmount;
+
+// Convert them to percentages that add up to exactly 100%
+
+const liquidityChart = (
+  <div 
+    style={{ 
+      width: '60px', 
+      height: '60px', 
+      borderRadius: '50%', 
+      flexShrink: 0,
+      background: `conic-gradient(#27ae60 0% ${accessiblePct}%, #c0392b ${accessiblePct}% 100%)` 
+    }} 
+  />
+);
 
   // Pie chart 3: Accessible Breakdown (Cash vs ISA vs LISA)
   const accessibleBreakdownChart = (
@@ -4575,7 +4542,7 @@ function SavingsSection({
 }
 createRoot(document.getElementById("root")!).render(<App />);
 function MortgageSection({ mortgages, setMortgages, mortgageSummaries }: { mortgages: MortgageInputs[]; setMortgages: React.Dispatch<React.SetStateAction<MortgageInputs[]>>; mortgageSummaries: any[] }) {
-  const addMortgage = () => setMortgages([...mortgages, { amount: 0, annualRate: 4, years: 25, monthlyOverpayment: 0, oneOffMonth: 0, oneOffAmount: 0 }]);
+  const addMortgage = () => setMortgages([...mortgages, { amount: 0, annualRate: 4, years: 25, monthlyOverpayment: 0, oneOffMonth: 0, oneOffAmount: 0, paymentDay: 1 }]);
   const updateMortgage = (index: number, patch: Partial<MortgageInputs>) => {
     setMortgages(mortgages.map((m, i) => (i === index ? { ...m, ...patch } : m)));
   };
@@ -4608,6 +4575,18 @@ function MortgageSection({ mortgages, setMortgages, mortgageSummaries }: { mortg
             <label>Monthly overpayment <NumberInput placeholder="0" value={mortgage.monthlyOverpayment} onChange={(monthlyOverpayment) => updateMortgage(i, { monthlyOverpayment })} /></label>
             <label>One-off month <NumberInput placeholder="0" value={mortgage.oneOffMonth} onChange={(oneOffMonth) => updateMortgage(i, { oneOffMonth })} /></label>
             <label>One-off amount <NumberInput placeholder="0" value={mortgage.oneOffAmount} onChange={(oneOffAmount) => updateMortgage(i, { oneOffAmount })} /></label>
+            <label>
+              Payment day of month
+              <input
+                type="number"
+                min={1}
+                max={28}
+                value={mortgage.paymentDay ?? 1}
+                onChange={(e) => updateMortgage(i, { paymentDay: Math.min(28, Math.max(1, parseInt(e.target.value) || 1)) })}
+                style={{ marginTop: '4px' }}
+                title="Day of the month your mortgage payment leaves your account (1–28)"
+              />
+            </label>
             <label>Last updated <input type="date" value={mortgage.lastUpdated || ""} onChange={(e) => updateMortgage(i, { lastUpdated: e.target.value })} style={{ marginTop: '4px' }} /></label>
           </div>
           {mortgageSummaries[i] && (
@@ -4641,74 +4620,28 @@ function MortgageSection({ mortgages, setMortgages, mortgageSummaries }: { mortg
   );
 }
 
-function DepletionChart({ projectedSavings, drawdownSettings, retirementAge, pensionAccessAge, inflationRate }: any) { 
-  const years = [0, 5, 10, 15, 20, 25, 30]; 
-  const colors = ['#2c7363', '#a26013', '#a7332f', '#4a5568', '#3182ce', '#805ad5', '#d53f8c', '#e6a23c', '#67c23a']; 
-  
-  const isAccessible = (bucket: any, age: number, settings: any) => { 
-    // Manual withdrawal age override
-    if (settings.useWithdrawAge && age >= settings.withdrawAge) return true; 
-    
-    // Standard access rules
-    if (bucket.type === 'lisa') return age >= 60; 
-    if (bucket.type === 'pension' || bucket.type === 'workplace-private-pension') return age >= pensionAccessAge; 
-    if (['nhs-pension', 'civil-service-pension', 'teachers-pension'].includes(bucket.type)) return age >= (bucket.startWithdrawalAge || 67); 
-    
-    // Cash/ISA always accessible
-    return true; 
-  }; 
+function DepletionChart({ simulation }: { simulation: RetirementSimulationResult }) { 
+  const colors = ['#2c7363', '#805ad5', '#d53f8c', '#4a5568']; 
+  const startAge = simulation.rows[0]?.age || 0;
+  const years = simulation.rows
+    .filter((row, idx) => idx === 0 || row.age === simulation.firstShortfallAge || row.age === simulation.finalAge || (row.age - startAge) % 5 === 0)
+    .map(row => row.age - startAge);
 
   const data = useMemo(() => {
-    return years.map(year => { 
-      const age = Math.round(retirementAge + year); 
-      const buckets = projectedSavings.filter((b: any) => !['nhs-pension', 'civil-service-pension', 'teachers-pension'].includes(b.type) && !b.isHidden).map((bucket: any) => { 
-        const settings = drawdownSettings[bucket.id] || { enabled: false, rate: 4, useWithdrawAge: false, withdrawAge: 60, useStopAge: false, stopAge: 60 }; 
-        
-        // During retirement phase (from Year 0 onwards), we assume contributions have already stopped.
-        // Therefore, growth is always at the bucket's own annual rate.
-        const r = clampNumber(bucket.annualRate) / 100;
-        
-        let startingBalance = bucket.finalBalance || 0;
-        
-        // Apply LISA penalty if retiring under 60 (consistent with summary cards)
-        if (bucket.type === 'lisa' && retirementAge < 60) {
-          startingBalance = startingBalance * 0.75;
-        }
+    return simulation.rows
+      .filter((row) => years.includes(row.age - startAge))
+      .map(row => ({
+        year: row.age - startAge,
+        age: row.age,
+        buckets: [
+          { label: 'Accessible', value: Math.max(0, row.accessiblePot) },
+          { label: 'LISA', value: Math.max(0, row.lisaPot) },
+          { label: 'Pension', value: Math.max(0, row.pensionPot) },
+          { label: 'Total Pot', value: Math.max(0, row.totalPot) },
+        ],
+      }));
+  }, [simulation, startAge, years.join(',')]);
 
-        let balance;
-
-        const drawdownStartAge = settings.useWithdrawAge ? settings.withdrawAge : (bucket.startWithdrawalAge || retirementAge);
-        // Pot is in drawdown if (drawdown rate is greater than 0) AND (We are at or past withdrawal age)
-        const isInDrawdown = (settings.rate > 0) && (age >= drawdownStartAge);
-
-        if (!isInDrawdown) {
-          // Pot is still growing until withdrawal age
-          const growthYears = Math.max(0, age - retirementAge);
-          balance = startingBalance * Math.pow(1 + r, growthYears);
-        } else {
-          // Pot is in drawdown
-          // We simulate year by year to correctly apply the % rate to the updated balance each year
-          const rate = settings.rate ?? 4;
-          const yearsInDrawdown = Math.max(0, age - Math.max(retirementAge, settings.useWithdrawAge ? settings.withdrawAge : (bucket.startWithdrawalAge || retirementAge)));
-          
-          // Initial balance at drawdown start
-          const drawdownStartAge = settings.useWithdrawAge ? settings.withdrawAge : (bucket.startWithdrawalAge || retirementAge);
-          const yearsUntilDrawdown = Math.max(0, drawdownStartAge - retirementAge);
-          let balanceAtDrawdownStart = startingBalance * Math.pow(1 + r, yearsUntilDrawdown);
-          
-          // Simulate year-by-year from drawdown start to current age
-          balance = balanceAtDrawdownStart;
-          for (let i = 0; i < yearsInDrawdown; i++) {
-            const withdrawal: number = balance * (rate / 100);
-            balance = balance * (1 + r) - withdrawal;
-          }
-          if (balance < 0) balance = 0;
-        } 
-        return { label: bucket.label, value: Math.max(0, balance) }; 
-      }); 
-      return { year, age, buckets }; 
-    });
-  }, [projectedSavings, drawdownSettings, retirementAge, pensionAccessAge, inflationRate, JSON.stringify(drawdownSettings)]);
   if (!data || data.length === 0 || !data[0]?.buckets) return null; 
   if (data[0].buckets.length === 0) return null; 
   return (
@@ -4717,16 +4650,15 @@ function DepletionChart({ projectedSavings, drawdownSettings, retirementAge, pen
         <h3 style={{ margin: 0 }}>Pot Depletion Projection</h3>
         <span 
           className="tooltip-trigger" 
-          data-tooltip={`Growth Assumption: Once retirement starts, all pots are assumed to grow at their individual Annual Growth Rate, as investments typically shift to safer, capital-preserving assets.\n\nDepletion: This chart shows how long your pots last based solely on your chosen drawdown rates, independent of your total retirement costs.`}
+          data-tooltip={`This chart now uses the same year-by-year retirement simulation as the funding analysis. It deducts actual required spending, taxes pension withdrawals, applies other income as it starts, and tracks the first shortfall age.`}
         >
           ⓘ
         </span>
       </div>
-      {/* <div style={{ marginBottom: '16px', fontSize: '0.8rem', color: '#666', fontStyle: 'italic' }}>
-        * Starting values reflect your accumulated savings plus growth from age {Math.round(retirementAge - (projectedSavings[0]?.contributed > 0 ? (projectedSavings[0]?.projected / (projectedSavings[0]?.monthly * 12 || 1)) : 0))} until retirement.
-      </div> */}
-            <div style={{ marginBottom: '16px', fontSize: '0.8rem', color: '#666', fontStyle: 'italic' }}>
-        * Starting values reflect your accumulated savings plus growth
+      <div style={{ marginBottom: '16px', fontSize: '0.8rem', color: '#666', fontStyle: 'italic' }}>
+        {simulation.firstShortfallAge === null
+          ? `No simulated shortfall through age ${simulation.finalAge}.`
+          : `First simulated shortfall at age ${simulation.firstShortfallAge}.`}
       </div>
       <LineChart data={data} years={years} colors={colors} />
     </div>)

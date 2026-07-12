@@ -59,6 +59,8 @@ export type MortgageInputs = {
   oneOffMonth: number;
   oneOffAmount: number;
   lastUpdated?: string;
+  /** Day of month the payment leaves the account, 1–28. Defaults to 1 if not set. */
+  paymentDay?: number;
 };
 
 export type TaxSettings = {
@@ -653,27 +655,42 @@ function calculateInterestWithoutOverpayments(amount: number, annualRate: number
 
 export function calculateMortgageUpdate(mortgage: MortgageInputs, today: Date = new Date()) {
   if (!mortgage.lastUpdated) return { newBalance: mortgage.amount, interestAccrued: 0, paymentsMade: 0, monthsElapsed: 0 };
-  
+
+  // paymentDay is the day-of-month the direct debit leaves (e.g. 5).
+  // Clamp to 1–28 to avoid issues with short months.
+  const paymentDay = Math.min(28, Math.max(1, Math.round(mortgage.paymentDay ?? 1)));
+
   const lastUpdate = new Date(mortgage.lastUpdated);
-  
-  // Calculate months between dates
-  const yearDiff = today.getFullYear() - lastUpdate.getFullYear();
-  const monthDiff = today.getMonth() - lastUpdate.getMonth();
-  let monthsElapsed = yearDiff * 12 + monthDiff;
-  
-  // Adjust if today's day is before last update's day
-  if (today.getDate() < lastUpdate.getDate()) {
-    monthsElapsed--;
+
+  // Walk forward month-by-month from lastUpdated, counting every payment date
+  // that has already passed (i.e. is on or before today).
+  let monthsElapsed = 0;
+  // Start from the month after lastUpdated and check if its payment date has passed.
+  // We use year/month arithmetic to avoid DST / day-overflow issues.
+  let checkYear = lastUpdate.getFullYear();
+  let checkMonth = lastUpdate.getMonth(); // 0-indexed
+
+  // Move to the next calendar month's payment date
+  checkMonth += 1;
+  if (checkMonth > 11) { checkMonth = 0; checkYear += 1; }
+
+  // Safety cap: never check more than 600 months ahead
+  for (let guard = 0; guard < 600; guard++) {
+    const paymentDate = new Date(checkYear, checkMonth, paymentDay);
+    if (paymentDate > today) break;
+    monthsElapsed += 1;
+    checkMonth += 1;
+    if (checkMonth > 11) { checkMonth = 0; checkYear += 1; }
   }
-  
+
   if (monthsElapsed <= 0) return { newBalance: mortgage.amount, interestAccrued: 0, paymentsMade: 0, monthsElapsed: 0 };
-  
+
   const standardPayment = monthlyMortgagePayment(mortgage.amount, mortgage.annualRate, mortgage.years);
   const monthlyRate = clampNumber(mortgage.annualRate) / 100 / 12;
   let balance = mortgage.amount;
   let interestAccrued = 0;
   let paymentsMade = 0;
-  
+
   for (let i = 0; i < monthsElapsed; i++) {
     const monthIndex = i + 1; // 1-based index for comparison with oneOffMonth
     const interest = balance * monthlyRate;
@@ -684,7 +701,7 @@ export function calculateMortgageUpdate(mortgage: MortgageInputs, today: Date = 
     balance = Math.max(0, balance + interest - payment);
     if (balance === 0) break;
   }
-  
+
   return { newBalance: balance, interestAccrued, paymentsMade, monthsElapsed };
 }
 
