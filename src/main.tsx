@@ -245,6 +245,7 @@ type Plan = {
     firePassiveIncome?: number;
     pensionTaxMethod?: 'ufpls' | 'lump-sum';
     volatility?: number;
+    coastTargetType?: 'current' | 'retirement';
   };
 };
 
@@ -337,6 +338,7 @@ function App() {
   const [birthYear, setBirthYear] = useState(1990);
   const [birthMonth, setBirthMonth] = useState(1);
   const [targetCoastAge, setTargetCoastAge] = useState(50);
+  const [coastTargetType, setCoastTargetType] = useState<'current' | 'retirement'>('current');
   const [expectedOutgoings, setExpectedOutgoings] = useState(0);
   const [drawdownRate, setDrawdownRate] = useState(4); // Defaulting to 4%
   const [otherRetirementIncome, setOtherRetirementIncome] = useState<(ExpenseLine & { isTaxable?: boolean })[]>([]);
@@ -564,13 +566,14 @@ function App() {
     swr,
     realGrowth,
     targetCoastAge,
+    coastTargetType,
   }), [
     paye, selfEmployment, taxSettings, budgetLines, annualBills, savings,
     projectionYears, mortgages, birthYear, birthMonth, expectedOutgoings,
     drawdownRate, otherRetirementIncome, drawdownSettings, inflationRate,
     additionalRetirementExpenses, retirementTaxableFraction, showLisaUnder60,
     includeStatePension, showMortgageCard, showAssetsCard, showCoastFireCard, swr, realGrowth,
-    targetCoastAge
+    targetCoastAge, coastTargetType
   ]);
 
   const [lastSavedData, setLastSavedData] = useState<string>(currentDataString);
@@ -1157,23 +1160,38 @@ const projectionBuckets = useMemo(() => {
   const annualAccessibleContribution = currentAnnualContributions.accessible;
   const annualLockedContribution = currentAnnualContributions.locked;
 
-  const coastFireResult = useMemo(() => calculateCoastFire(
+const coastFireResult = useMemo(() => calculateCoastFire(
     currentAge,
     retirementAge,
     pensionAccessAge,
     currentAccessibleWealth,
     currentLockedWealth,
-    retirementSummary.currentMonthlyExpenses * 12,
+    budget.monthlyExpenses * 12, // <-- Change this to budget.monthlyExpenses * 12
     realGrowth,
     swr,
     annualAccessibleContribution,
     annualLockedContribution,
-    0,
-    "1257L",
-    "england-wales-ni",
-    "ufpls",
+    firePassiveIncome,           // <-- Change this to firePassiveIncome
+    taxSettings.taxCode,         // <-- Change this to taxSettings.taxCode
+    taxSettings.region,          // <-- Change this to taxSettings.region
+    pensionTaxMethod,            // <-- Change this to pensionTaxMethod
     annualContributionsAtAge
-  ), [currentAge, retirementAge, pensionAccessAge, currentAccessibleWealth, currentLockedWealth, retirementSummary.currentMonthlyExpenses, annualAccessibleContribution, annualLockedContribution, annualContributionsAtAge, realGrowth, swr]);
+  ), [
+    currentAge, 
+    retirementAge, 
+    pensionAccessAge, 
+    currentAccessibleWealth, 
+    currentLockedWealth, 
+    budget.monthlyExpenses,      // <-- Update dependency
+    annualAccessibleContribution, 
+    annualLockedContribution, 
+    annualContributionsAtAge, 
+    realGrowth, 
+    swr, 
+    firePassiveIncome,           // <-- Add dependency
+    taxSettings,                 // <-- Add dependency
+    pensionTaxMethod             // <-- Add dependency
+  ]);
 
   
   const sections: { id: SectionId; title: string; value: string; detail: string; color: string; subValue?: string; subLabel?: string }[] = [
@@ -1200,9 +1218,36 @@ const projectionBuckets = useMemo(() => {
     ...(showCoastFireCard ? [{ 
       id: "coastfire" as SectionId, 
       title: "Coast FIRE", 
-      value: coastFireResult.isCoastFire ? "REACHED" : (coastFireResult.coastFireAge === -1 ? "NOT REACHED" : `Age ${Math.floor(coastFireResult.coastFireAge)}`), 
-      detail: coastFireResult.isCoastFire ? "contributions optional" : (targetCoastAge ? `Estimated (Target: Age ${targetCoastAge})` : "estimated coast age"),
-      color: "linear-gradient(135deg, #fffcf3 0%, #fdf9e2 100%)"
+      value: coastFireResult.isCoastFire 
+        ? "REACHED" 
+        : (coastFireResult.coastFireAge === -1 
+          ? "NOT REACHED" 
+          : (targetCoastAge 
+            ? (coastFireResult.coastFireAge <= targetCoastAge ? "ON TRACK" : "BEHIND TARGET")
+            : `Age ${Math.floor(coastFireResult.coastFireAge)}`
+          )
+        ), 
+      detail: coastFireResult.isCoastFire 
+        ? "contributions optional" 
+        : (coastFireResult.coastFireAge === -1
+          ? "not achievable"
+          : (targetCoastAge 
+            ? `Est: Age ${Math.floor(coastFireResult.coastFireAge)} (Target: ${targetCoastAge})` 
+            : "estimated coast age"
+          )
+        ),
+      color: coastFireResult.isCoastFire 
+        ? "linear-gradient(135deg, #ecfdf5 0%, #d1fae5 100%)" 
+        : (coastFireResult.coastFireAge === -1 
+          ? "linear-gradient(135deg, #fff5f5 0%, #ffe3e3 100%)" 
+          : (targetCoastAge 
+            ? (coastFireResult.coastFireAge <= targetCoastAge 
+              ? "linear-gradient(135deg, #ecfdf5 0%, #d1fae5 100%)" 
+              : "linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%)"
+            )
+            : "linear-gradient(135deg, #fffcf3 0%, #fdf9e2 100%)"
+          )
+        )
     }] : []),
     ...(showAssetsCard ? [{ 
       id: "assets" as SectionId, 
