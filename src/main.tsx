@@ -3026,16 +3026,20 @@ function RetirementSection({
       </section>
 
       <section className="panel span-6">
-        <h2>Simulated Retirement Summary</h2>
+        <h2>Retirement Cost Summary</h2>
         <ResultRows rows={[
-          ["First-Year Net Income", (firstRetirementRow?.netIncome || 0) / 12],
-          ["First-Year Costs", -(firstRetirementRow?.expenses || 0) / 12],
-          ["First-Year Shortfall", -(firstRetirementRow?.shortfall || 0) / 12],
-          ["Final Pot", retirementSimulation.finalPot],
-          ["Total Tax Paid in Simulation", -retirementSimulation.totalTaxPaid],
+          ["Costs in today's money (monthly)", -summary.currentMonthlyExpenses],
+          [`Costs at retirement (inflated ${projectionYears.toFixed(1)} yrs)`, -(firstRetirementRow?.expenses || 0) / 12],
+          ["Avg. net income across retirement", retirementSimulation.rows.length > 0 ? retirementSimulation.rows.reduce((sum, r) => sum + r.netIncome, 0) / retirementSimulation.rows.length / 12 : 0],
+          ["Final pot remaining", retirementSimulation.finalPot],
         ]} />
-        <div style={{ marginTop: '16px', fontSize: '0.85rem', color: '#666', borderTop: '1px solid #eee', paddingTop: '12px' }}>
-            <p><strong>Note:</strong> This uses the annual simulation from age {Math.ceil(retirementAge)} to {retirementSimulation.finalAge}, including pension-access timing, taxable pension withdrawals, state/DB/manual income, and selected retirement costs.</p>
+        <div style={{ marginTop: '16px', fontSize: '0.85rem', borderTop: '1px solid #eee', paddingTop: '12px' }}>
+          <span style={{ fontWeight: 700, color: retirementStatusCovered ? '#2c7363' : '#a7332f' }}>
+            {retirementStatusCovered
+              ? `✓ Pot covers full retirement to age ${retirementSimulation.finalAge}`
+              : `⚠ First shortfall projected at age ${retirementSimulation.firstShortfallAge}`}
+          </span>
+          <p style={{ color: '#666', marginTop: '6px' }}>Simulated age {Math.ceil(retirementAge)} → {retirementSimulation.finalAge}, using {inflationRate}% inflation, pension-access timing, and selected retirement costs.</p>
         </div>
         {hasActiveLisa && retirementAge < 60 && showLisaUnder60 && (
           <p style={{color: '#a7332f', fontSize: '0.85rem', marginTop: '10px', fontWeight: 600}}>
@@ -4237,7 +4241,7 @@ function WealthSummaryCard({ savings, mortgages = [], assets = [], currentAge }:
     </svg>
   );
 
-  // Pie chart 2: Liquidity (Accessible vs Locked)
+  //Pie chart 2: Liquidity (Accessible vs Locked)
   // const liquidityChart = (
   //   <svg viewBox="0 0 32 32" style={{ width: '60px', height: '60px', flexShrink: 0 }}>
   //     <circle r="16" cx="16" cy="16" style={{ fill: '#ddebfa' }} />
@@ -4246,22 +4250,50 @@ function WealthSummaryCard({ savings, mortgages = [], assets = [], currentAge }:
   //   </svg>
   // );
 
-  const accessibleAmount = 28848.25; // Swap with your actual variables
-const lockedAmount = 51587.90;     // Swap with your actual variables
-const totalAmount = accessibleAmount + lockedAmount;
 
-// Convert them to percentages that add up to exactly 100%
+// Pie chart 2: Liquidity (Accessible vs Locked)
+// Calculate local percentages specifically for this chart using a local total
+const localLiquidityTotal = summary.accessible + summary.locked;
+const chartAccessiblePct = (summary.accessible / localLiquidityTotal) * 100;
+const chartLockedPct = (summary.locked / localLiquidityTotal) * 100;
+
+// Circumference of r=8 is exactly 50.265 (2 * Math.PI * 8)
+const circumference = 50.265;
+const accessibleStroke = (chartAccessiblePct / 100) * circumference;
+const lockedStroke = (chartLockedPct / 100) * circumference;
 
 const liquidityChart = (
-  <div 
-    style={{ 
-      width: '60px', 
-      height: '60px', 
-      borderRadius: '50%', 
-      flexShrink: 0,
-      background: `conic-gradient(#27ae60 0% ${accessiblePct}%, #c0392b ${accessiblePct}% 100%)` 
-    }} 
-  />
+  <svg viewBox="0 0 32 32" style={{ width: '60px', height: '60px', flexShrink: 0 }}>
+    {/* Accessible Slice (Green) */}
+    <circle 
+      r="8" 
+      cx="16" 
+      cy="16" 
+      transform="rotate(-90 16 16)"
+      style={{ 
+        fill: 'transparent', 
+        stroke: '#27ae60', 
+        strokeWidth: 16, 
+        strokeDasharray: `${accessibleStroke} ${circumference}`, 
+        strokeDashoffset: 0 
+      }} 
+    />
+    
+    {/* Locked Slice (Red) */}
+    <circle 
+      r="8" 
+      cx="16" 
+      cy="16" 
+      transform="rotate(-90 16 16)"
+      style={{ 
+        fill: 'transparent', 
+        stroke: '#c0392b', 
+        strokeWidth: 16, 
+        strokeDasharray: `${lockedStroke} ${circumference}`, 
+        strokeDashoffset: -accessibleStroke 
+      }} 
+    />
+  </svg>
 );
 
   // Pie chart 3: Accessible Breakdown (Cash vs ISA vs LISA)
@@ -4634,7 +4666,7 @@ function DepletionChart({ simulation }: { simulation: RetirementSimulationResult
         year: row.age - startAge,
         age: row.age,
         buckets: [
-          { label: 'Accessible', value: Math.max(0, row.accessiblePot) },
+          { label: 'ISA + Cash', value: Math.max(0, row.accessiblePot) },
           { label: 'LISA', value: Math.max(0, row.lisaPot) },
           { label: 'Pension', value: Math.max(0, row.pensionPot) },
           { label: 'Total Pot', value: Math.max(0, row.totalPot) },
@@ -4662,6 +4694,7 @@ function DepletionChart({ simulation }: { simulation: RetirementSimulationResult
       </div>
       <LineChart data={data} years={years} colors={colors} />
     </div>)
+
 function LineChart({ data, years, colors }: any) { 
   const width = 800; 
   const height = 400; 
@@ -4718,12 +4751,67 @@ function LineChart({ data, years, colors }: any) {
             <text x={padding - 10} y={getY(maxVal * p) + 4} textAnchor='end' fontSize='11' fill='#888'>{money.format(maxVal * p)}</text>
           </g>
         ))}
-        {data.map((d: any) => (
+        
+        {/* {data.map((d: any) => (
           <g key={d.year}>
             <text x={getX(d.year)} y={height - padding + 20} textAnchor='middle' fontSize='11' fill='#888'>{'+' + d.year + 'y'}</text>
             <text x={getX(d.year)} y={height - padding + 35} textAnchor='middle' fontSize='10' fill='#aaa'>{'Age ' + d.age}</text>
           </g>
-        ))}
+        ))} */}
+        {data.map((d: any, index: number) => {
+          const isFirstYear = index === 0;
+          const isLastYear = index === data.length - 1;
+          const isEveryFifthYear = d.year % 5 === 0;
+
+          // Define a threshold (e.g., 2 years) to prevent crowding near the end
+          const lastYear = data[data.length - 1].year;
+          const isTooCloseToLastYear = !isLastYear && (lastYear - d.year) <= 2;
+
+          // Decide if we should render this label
+          let shouldRender = false;
+          if (isFirstYear || isLastYear) {
+            shouldRender = true;
+          } else if (isEveryFifthYear && !isTooCloseToLastYear) {
+            shouldRender = true;
+          }
+
+          if (!shouldRender) {
+            return null;
+          }
+
+          return (
+            <g key={d.year}>
+              <line 
+                x1={getX(d.year)} 
+                y1={height - padding} 
+                x2={getX(d.year)} 
+                y2={height - padding + 5} 
+                stroke='#ccc' 
+              />
+              <text 
+                x={getX(d.year)} 
+                y={height - padding + 20} 
+                textAnchor='middle' 
+                fontSize='11' 
+                fill={isLastYear ? '#ef4444' : '#888'} // Highlight final year in red
+                fontWeight={isLastYear ? 'bold' : 'normal'}
+              >
+                {'+' + d.year + 'y'}
+              </text>
+              <text 
+                x={getX(d.year)} 
+                y={height - padding + 35} 
+                textAnchor='middle' 
+                fontSize='10' 
+                fill={isLastYear ? '#ef4444' : '#aaa'}
+                fontWeight={isLastYear ? 'bold' : 'normal'}
+              >
+                {'Age ' + Math.round(d.age)}
+              </text>
+            </g>
+          );
+        })}
+
         {bucketNames.map((name: string, i: number) => {
           const points = data.map((d: any) => {
             const bucket = d.buckets.find((b: any) => b.label === name);
