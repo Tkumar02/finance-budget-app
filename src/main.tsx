@@ -227,6 +227,7 @@ type Plan = {
     birthYear: number;
     birthMonth: number;
     retirementAge: number;
+    targetCoastAge?: number;
     expectedOutgoings: number;
     otherRetirementIncome: (ExpenseLine & { isTaxable?: boolean })[];
     drawdownRate: number;
@@ -242,6 +243,8 @@ type Plan = {
     swr?: number;
     realGrowth?: number;
     firePassiveIncome?: number;
+    pensionTaxMethod?: 'ufpls' | 'lump-sum';
+    volatility?: number;
   };
 };
 
@@ -333,6 +336,7 @@ function App() {
 
   const [birthYear, setBirthYear] = useState(1990);
   const [birthMonth, setBirthMonth] = useState(1);
+  const [targetCoastAge, setTargetCoastAge] = useState(50);
   const [expectedOutgoings, setExpectedOutgoings] = useState(0);
   const [drawdownRate, setDrawdownRate] = useState(4); // Defaulting to 4%
   const [otherRetirementIncome, setOtherRetirementIncome] = useState<(ExpenseLine & { isTaxable?: boolean })[]>([]);
@@ -559,12 +563,14 @@ function App() {
     showCoastFireCard,
     swr,
     realGrowth,
+    targetCoastAge,
   }), [
     paye, selfEmployment, taxSettings, budgetLines, annualBills, savings,
     projectionYears, mortgages, birthYear, birthMonth, expectedOutgoings,
     drawdownRate, otherRetirementIncome, drawdownSettings, inflationRate,
     additionalRetirementExpenses, retirementTaxableFraction, showLisaUnder60,
-    includeStatePension, showMortgageCard, showAssetsCard, showCoastFireCard, swr, realGrowth
+    includeStatePension, showMortgageCard, showAssetsCard, showCoastFireCard, swr, realGrowth,
+    targetCoastAge
   ]);
 
   const [lastSavedData, setLastSavedData] = useState<string>(currentDataString);
@@ -647,6 +653,7 @@ function App() {
     }
     setBirthYear(d.birthYear || 1990);
     setBirthMonth(d.birthMonth || 1);
+    setTargetCoastAge(d.targetCoastAge ?? 50);
     setExpectedOutgoings(d.expectedOutgoings || 0);
     setDrawdownRate(d.drawdownRate || 4);
     setOtherRetirementIncome(d.otherRetirementIncome || []);
@@ -677,6 +684,7 @@ function App() {
       mortgages: mortgages,
       birthYear: d.birthYear || 1990,
       birthMonth: d.birthMonth || 1,
+      targetCoastAge: d.targetCoastAge ?? 50,
       expectedOutgoings: d.expectedOutgoings || 0,
       drawdownRate: d.drawdownRate || 4,
       otherRetirementIncome: d.otherRetirementIncome || [],
@@ -710,6 +718,7 @@ function App() {
       mortgages,
       birthYear,
       birthMonth,
+      targetCoastAge,
       expectedOutgoings,
       drawdownRate,
       otherRetirementIncome,
@@ -770,6 +779,7 @@ function App() {
     setMortgages([]);
     setBirthYear(1990);
     setBirthMonth(1);
+    setTargetCoastAge(50);
     setExpectedOutgoings(0);
     setDrawdownRate(4);
     setOtherRetirementIncome([]);
@@ -800,6 +810,7 @@ function App() {
       mortgages: [],
       birthYear: 1990,
       birthMonth: 1,
+      targetCoastAge: 50,
       expectedOutgoings: 0,
       drawdownRate: 4,
       otherRetirementIncome: [],
@@ -1190,7 +1201,7 @@ const projectionBuckets = useMemo(() => {
       id: "coastfire" as SectionId, 
       title: "Coast FIRE", 
       value: coastFireResult.isCoastFire ? "REACHED" : (coastFireResult.coastFireAge === -1 ? "NOT REACHED" : `Age ${Math.floor(coastFireResult.coastFireAge)}`), 
-      detail: coastFireResult.isCoastFire ? "contributions optional" : "estimated coast age",
+      detail: coastFireResult.isCoastFire ? "contributions optional" : (targetCoastAge ? `Estimated (Target: Age ${targetCoastAge})` : "estimated coast age"),
       color: "linear-gradient(135deg, #fffcf3 0%, #fdf9e2 100%)"
     }] : []),
     ...(showAssetsCard ? [{ 
@@ -1393,6 +1404,7 @@ const projectionBuckets = useMemo(() => {
         <CoastFireSection 
           currentAge={currentAge} 
           retirementAge={retirementAge}
+          targetCoastAge={targetCoastAge}
           pensionAccessAge={pensionAccessAge}
           currentAccessibleBalance={currentAccessibleWealth}
           currentLockedBalance={currentLockedWealth}
@@ -1416,6 +1428,8 @@ const projectionBuckets = useMemo(() => {
         <RetirementSection
           retirementAge={retirementAge}
           setRetirementAge={(targetAge: number) => setProjectionYears(targetAge - currentAge)}
+          targetCoastAge={targetCoastAge}
+          setTargetCoastAge={setTargetCoastAge}
           outgoings={expectedOutgoings} setOutgoings={setExpectedOutgoings}
           budgetExpenses={budget.monthlyExpenses}
           monthlySurplus={budget.monthlySurplus}
@@ -1467,6 +1481,7 @@ const projectionBuckets = useMemo(() => {
 function CoastFireSection({ 
   currentAge, 
   retirementAge, 
+  targetCoastAge,
   pensionAccessAge, 
   currentAccessibleBalance, 
   currentLockedBalance, 
@@ -1504,15 +1519,22 @@ function CoastFireSection({
   const [excelStatePensionTaxFactor, setExcelStatePensionTaxFactor] = useState(0.8);
   const [excelStatePensionInflation, setExcelStatePensionInflation] = useState(2.8);
   const [excelPpTaxFactor, setExcelPpTaxFactor] = useState(0.85);
-  const [excelCoastAge, setExcelCoastAge] = useState(47);
+  const [excelCoastAge, setExcelCoastAge] = useState(targetCoastAge || 50);
   const [excelRetirementAge, setExcelRetirementAge] = useState(retirementAge || 58);
   const [excelEndAge, setExcelEndAge] = useState(90);
+
+  useEffect(() => {
+    if (targetCoastAge) {
+      setExcelCoastAge(targetCoastAge);
+    }
+  }, [targetCoastAge]);
 
   const syncWithProfile = () => {
     setExcelIsaAddition(annualAccessibleContribution);
     setExcelPpAddition(annualLockedContribution);
     setExcelNetIncomeRequired(Math.round(netExpenses));
     setExcelRetirementAge(retirementAge || 58);
+    setExcelCoastAge(targetCoastAge || 50);
   };
 
   const updatedResult = useMemo(() => calculateCoastFire(
@@ -1793,6 +1815,38 @@ function CoastFireSection({
                           : `Even if you keep contributing ${money.format(annualContribution)}/yr, you won't reach Coast FIRE by retirement age ${retirementAge.toFixed(0)}.`)
                         : `If you keep contributing ${money.format(annualContribution)}/yr, you will reach Coast FIRE at age ${Math.floor(updatedResult.coastFireAge)}. From that point, you don't need to save another penny for retirement.`)}
                   </p>
+
+                  {targetCoastAge > 0 && (
+                    <div style={{ 
+                      marginTop: '15px', 
+                      padding: '12px 16px', 
+                      borderRadius: '8px', 
+                      background: 'rgba(255,255,255,0.6)', 
+                      border: '1px solid rgba(0,0,0,0.05)',
+                      fontSize: '0.9rem' 
+                    }}>
+                      <span style={{ fontWeight: 600, display: 'block', marginBottom: '4px', color: '#475569' }}>
+                        Target Coast Age vs. Projection:
+                      </span>
+                      {updatedResult.isCoastFire ? (
+                        <span style={{ color: '#166534', fontWeight: 600 }}>
+                          ✓ Reached today (Age {currentAge.toFixed(1)}), ahead of target age {targetCoastAge}.
+                        </span>
+                      ) : updatedResult.coastFireAge === -1 ? (
+                        <span style={{ color: '#991b1b', fontWeight: 600 }}>
+                          ✗ Not achievable by target age {targetCoastAge}.
+                        </span>
+                      ) : updatedResult.coastFireAge <= targetCoastAge ? (
+                        <span style={{ color: '#166534', fontWeight: 600 }}>
+                          ✓ On track! You will reach Coast FIRE at age {Math.floor(updatedResult.coastFireAge)}, which is before your target age {targetCoastAge}.
+                        </span>
+                      ) : (
+                        <span style={{ color: '#92400e', fontWeight: 600 }}>
+                          ⚠ Behind target: Projected to reach Coast FIRE at age {Math.floor(updatedResult.coastFireAge)}, which is {Math.ceil(updatedResult.coastFireAge - targetCoastAge)} years after your target age {targetCoastAge}.
+                        </span>
+                      )}
+                    </div>
+                  )}
                 </div>
 
                 <div style={{ borderTop: '1px solid rgba(0,0,0,0.08)', paddingTop: '15px', marginTop: '10px' }}>
@@ -1917,6 +1971,7 @@ function CoastFireSection({
                     <tbody>
                       {potGrowthTable.map((row, idx) => {
                         const isCoastAge  = updatedResult.coastFireAge > 0 && row.age === Math.floor(updatedResult.coastFireAge);
+                        const isTargetCoastAge = targetCoastAge > 0 && row.age === Math.floor(targetCoastAge);
                         const isPensionUnlockAge = row.age === pensionAccessAge;
                         const isRetirementAge = row.age === Math.floor(retirementAge);
                         const isFireAge   = fullFireResult.fullFireAge > 0 && row.age === Math.floor(fullFireResult.fullFireAge);
@@ -1930,16 +1985,17 @@ function CoastFireSection({
                           : row.phase === 'coasting' ? { label: 'Coasting', color: '#854d0e', bg: '#fef9c3' }
                           : { label: row.isShortfall ? 'Shortfall ⚠️' : 'Drawdown', color: row.isShortfall ? '#be123c' : '#be185d', bg: row.isShortfall ? '#fecdd3' : '#fce7f3' };
 
-                        const fw = (isCoastAge || isRetirementAge || isPensionUnlockAge || isFireAge) ? 700 : 400;
+                        const fw = (isCoastAge || isTargetCoastAge || isRetirementAge || isPensionUnlockAge || isFireAge) ? 700 : 400;
 
                         return (
                           <tr key={row.age} style={{ background: phaseBg, borderBottom: '1px solid rgba(0,0,0,0.04)' }}>
                             <td style={{ padding: '8px 12px', fontWeight: fw, color: '#334155', whiteSpace: 'nowrap' }}>
                               {row.age}
                               {isCoastAge     && <span style={{ marginLeft: '5px', fontSize: '0.67rem', background: '#bbf7d0', color: '#166534', padding: '1px 5px', borderRadius: '4px', fontWeight: 700 }}>Coast FIRE</span>}
-                              {isRetirementAge && !isCoastAge && <span style={{ marginLeft: '5px', fontSize: '0.67rem', background: '#fde68a', color: '#854d0e', padding: '1px 5px', borderRadius: '4px', fontWeight: 700 }}>Retire</span>}
-                              {isPensionUnlockAge && !isCoastAge && !isRetirementAge && <span style={{ marginLeft: '5px', fontSize: '0.67rem', background: '#dbeafe', color: '#1e40af', padding: '1px 5px', borderRadius: '4px', fontWeight: 700 }}>Pension Unlocks</span>}
-                              {isFireAge && !isCoastAge && !isRetirementAge && !isPensionUnlockAge && <span style={{ marginLeft: '5px', fontSize: '0.67rem', background: '#e9d5ff', color: '#6b21a8', padding: '1px 5px', borderRadius: '4px', fontWeight: 700 }}>Full FIRE</span>}
+                              {isTargetCoastAge && !isCoastAge && <span style={{ marginLeft: '5px', fontSize: '0.67rem', background: '#bae6fd', color: '#0369a1', padding: '1px 5px', borderRadius: '4px', fontWeight: 700 }}>Target Coast</span>}
+                              {isRetirementAge && !isCoastAge && !isTargetCoastAge && <span style={{ marginLeft: '5px', fontSize: '0.67rem', background: '#fde68a', color: '#854d0e', padding: '1px 5px', borderRadius: '4px', fontWeight: 700 }}>Retire</span>}
+                              {isPensionUnlockAge && !isCoastAge && !isRetirementAge && !isTargetCoastAge && <span style={{ marginLeft: '5px', fontSize: '0.67rem', background: '#dbeafe', color: '#1e40af', padding: '1px 5px', borderRadius: '4px', fontWeight: 700 }}>Pension Unlocks</span>}
+                              {isFireAge && !isCoastAge && !isRetirementAge && !isPensionUnlockAge && !isTargetCoastAge && <span style={{ marginLeft: '5px', fontSize: '0.67rem', background: '#e9d5ff', color: '#6b21a8', padding: '1px 5px', borderRadius: '4px', fontWeight: 700 }}>Full FIRE</span>}
                             </td>
                             <td style={{ padding: '8px 12px', whiteSpace: 'nowrap' }}>
                               <span style={{ fontSize: '0.72rem', background: phaseLabel.bg, color: phaseLabel.color, padding: '2px 7px', borderRadius: '4px', fontWeight: 600 }}>
@@ -2431,6 +2487,8 @@ function RetirementSection({
   setBirthYear,
   retirementAge,
   setRetirementAge,
+  targetCoastAge,
+  setTargetCoastAge,
   outgoings,
   setOutgoings,
   budgetExpenses,
@@ -2481,6 +2539,8 @@ function RetirementSection({
   setBirthMonth: (m: number) => void;
   retirementAge: number;
   setRetirementAge: (a: number) => void;
+  targetCoastAge: number;
+  setTargetCoastAge: (a: number) => void;
   outgoings: number;
   setOutgoings: (o: number) => void;
   budgetExpenses: number;
@@ -2713,6 +2773,9 @@ function RetirementSection({
         <div className="settings-grid">
           <label>Target Retirement Age 
             <NumberInput placeholder="67" value={Math.round(retirementAge) || 0} onChange={setRetirementAge} max={120} />
+          </label>
+          <label>Target Coast Age 
+            <NumberInput placeholder="50" value={Math.round(targetCoastAge) || 0} onChange={setTargetCoastAge} max={120} />
           </label>
           <label>Assumed Annual Inflation % 
             <NumberInput placeholder="3" value={inflationRate} onChange={setInflationRate} suffix="%" />

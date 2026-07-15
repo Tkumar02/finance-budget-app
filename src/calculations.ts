@@ -774,6 +774,20 @@ function annualContributionsForAge(
   };
 }
 
+export type CoastFireResult = {
+  coastFireAge: number;
+  isCoastFire: boolean;
+  targetPotAtRetirement: number;
+  requiredCurrentBalance: number;
+  requiredCurrentAccessible: number;
+  currentCoastGap: number;
+  projectedPotAtRetirement: number;
+  yearsToCoast: number;
+  bridgeRequired: number;
+  isBridgeFunded: boolean;
+  coastFirePotAtAge: number;
+};
+
 export function calculateCoastFire(
   currentAge: number,
   retirementAge: number,
