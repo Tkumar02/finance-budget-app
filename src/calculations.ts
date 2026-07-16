@@ -788,6 +788,39 @@ export type CoastFireResult = {
   coastFirePotAtAge: number;
 };
 
+export function getTargetPotAtAge(
+  drawdownAge: number,
+  pensionAccessAge: number,
+  statePensionAge: number,
+  annualExpenses: number,
+  passiveIncome: number,
+  statePensionAmount: number,
+  includeStatePension: boolean,
+  swr: number,
+  realGrowthRate: number,
+  taxCode: string,
+  region: Region
+): number {
+  const solvedPreState = solveGrossPensionWithdrawal(annualExpenses - passiveIncome, passiveIncome, 0.75, taxCode, region);
+  
+  if (includeStatePension) {
+    const growthFactor = 1 + (realGrowthRate / 100);
+    const statePensionYears = Math.max(0, statePensionAge - drawdownAge);
+    const solvedPostState = solveGrossPensionWithdrawal(
+      Math.max(0, annualExpenses - passiveIncome - statePensionAmount),
+      passiveIncome + statePensionAmount,
+      0.75,
+      taxCode,
+      region
+    );
+    const targetPotPostState = solvedPostState.grossPension / (swr / 100);
+    const pvStatePensionBridge = calculatePVBridge(solvedPreState.grossPension, realGrowthRate, statePensionYears);
+    return pvStatePensionBridge + (targetPotPostState / Math.pow(growthFactor, statePensionYears));
+  } else {
+    return solvedPreState.grossPension / (swr / 100);
+  }
+}
+
 export function calculateCoastFire(
   currentAge: number,
   retirementAge: number,
@@ -803,7 +836,10 @@ export function calculateCoastFire(
   taxCode: string = "1257L",
   region: Region = "england-wales-ni",
   pensionTaxMethod: 'ufpls' | 'lump-sum' = 'ufpls',
-  contributionSchedule?: AnnualContributionSchedule
+  contributionSchedule?: AnnualContributionSchedule,
+  includeStatePension: boolean = false,
+  statePensionAge: number = 67,
+  statePensionAmount: number = 12547.60
 ): CoastFireResult {
   const taxOnPassive = calculateIncomeTax(passiveIncome, taxCode, 0, region).totalTax;
   const netPassive = Math.max(0, passiveIncome - taxOnPassive);
@@ -812,8 +848,20 @@ export function calculateCoastFire(
   const bridgeYears = Math.max(0, pensionAccessAge - retirementAge);
   const bridgeCostAtRetirement = calculatePVBridge(netBridgeExpense, realGrowthRate, bridgeYears);
   
-  const solved = solveGrossPensionWithdrawal(annualExpenses - passiveIncome, passiveIncome, 0.75, taxCode, region);
-  const targetPot = solved.grossPension / (swr / 100);
+  const drawdownAgeAtAccess = Math.max(retirementAge, pensionAccessAge);
+  const targetPot = getTargetPotAtAge(
+    drawdownAgeAtAccess,
+    pensionAccessAge,
+    statePensionAge,
+    annualExpenses,
+    passiveIncome,
+    statePensionAmount,
+    includeStatePension,
+    swr,
+    realGrowthRate,
+    taxCode,
+    region
+  );
   
   function checkStatus(acc: number, lock: number, age: number) {
     const yearsToRetire = Math.max(0, retirementAge - age);
@@ -922,7 +970,10 @@ export function calculateFullFire(
   passiveIncome: number = 0,
   taxCode: string = "1257L",
   region: Region = "england-wales-ni",
-  contributionSchedule?: AnnualContributionSchedule
+  contributionSchedule?: AnnualContributionSchedule,
+  includeStatePension: boolean = false,
+  statePensionAge: number = 67,
+  statePensionAmount: number = 12547.60
 ): FullFireResult {
   const taxOnPassive = calculateIncomeTax(passiveIncome, taxCode, 0, region).totalTax;
   const netPassive = Math.max(0, passiveIncome - taxOnPassive);
@@ -932,8 +983,21 @@ export function calculateFullFire(
   function checkStatus(acc: number, lock: number, age: number) {
     const bridgeYears = Math.max(0, pensionAccessAge - age);
     const pvBridge = calculatePVBridge(netBridgeExpense, realGrowthRate, bridgeYears);
-    const solved = solveGrossPensionWithdrawal(annualExpenses - passiveIncome, passiveIncome, 0.75, taxCode, region);
-    const targetPot = solved.grossPension / (swr / 100);
+    
+    const drawdownAgeAtAccess = Math.max(age, pensionAccessAge);
+    const targetPot = getTargetPotAtAge(
+      drawdownAgeAtAccess,
+      pensionAccessAge,
+      statePensionAge,
+      annualExpenses,
+      passiveIncome,
+      statePensionAmount,
+      includeStatePension,
+      swr,
+      realGrowthRate,
+      taxCode,
+      region
+    );
     
     const canFundBridge = acc >= pvBridge;
     const remainingAfterBridge = (acc - pvBridge) + lock;
@@ -1604,7 +1668,10 @@ export function runMonteCarloSimulation(
   taxCode: string = "1257L",
   region: Region = "england-wales-ni",
   pensionTaxMethod: 'ufpls' | 'lump-sum' = 'ufpls',
-  numSimulations: number = 1000
+  numSimulations: number = 1000,
+  includeStatePension: boolean = false,
+  statePensionAge: number = 67,
+  statePensionAmount: number = 12547.60
 ): MonteCarloResult {
   const ages: number[] = [];
   const startAge = Math.floor(retirementAge);
@@ -1654,9 +1721,12 @@ export function runMonteCarloSimulation(
       const pensionUnlocked = age >= pensionAccessAge;
       const pensionTaxableFraction = (pensionTaxMethod === 'lump-sum' && age >= pensionUnlockAge) ? 1.0 : 0.75;
 
-      const taxOnPassive = calculateIncomeTax(passiveIncome, taxCode, 0, region).totalTax;
-      const netPassive = Math.max(0, passiveIncome - taxOnPassive);
-      const netToWithdraw = Math.max(0, annualExpenses - netPassive);
+      const activeStatePension = (includeStatePension && age >= statePensionAge) ? statePensionAmount : 0;
+      const combinedFixedIncome = passiveIncome + activeStatePension;
+
+      const taxOnFixed = calculateIncomeTax(combinedFixedIncome, taxCode, 0, region).totalTax;
+      const netFixed = Math.max(0, combinedFixedIncome - taxOnFixed);
+      const netToWithdraw = Math.max(0, annualExpenses - netFixed);
 
       let withdrawalAccessible = 0;
       let withdrawalPension = 0;
@@ -1674,24 +1744,24 @@ export function runMonteCarloSimulation(
             const netFromAccessible = netToWithdraw * accessibleFrac;
             withdrawalAccessible = Math.min(accessibleNow, netFromAccessible);
 
-            const netTarget = annualExpenses - passiveIncome - withdrawalAccessible;
-            const solved = solveGrossPensionWithdrawal(netTarget, passiveIncome, pensionTaxableFraction, taxCode, region);
+            const netTarget = annualExpenses - combinedFixedIncome - withdrawalAccessible;
+            const solved = solveGrossPensionWithdrawal(netTarget, combinedFixedIncome, pensionTaxableFraction, taxCode, region);
             let grossPension = solved.grossPension;
 
             if (grossPension <= pensionNow) {
               withdrawalPension = grossPension;
             } else {
               withdrawalPension = pensionNow;
-              const combinedTaxable = passiveIncome + pensionTaxableFraction * pensionNow;
+              const combinedTaxable = combinedFixedIncome + pensionTaxableFraction * pensionNow;
               const combinedTax = calculateIncomeTax(combinedTaxable, taxCode, 0, region).totalTax;
-              const netFromPensionAndPassive = pensionNow + passiveIncome - combinedTax;
-              const remainingNetNeeded = annualExpenses - netFromPensionAndPassive - withdrawalAccessible;
+              const netFromPensionAndFixed = pensionNow + combinedFixedIncome - combinedTax;
+              const remainingNetNeeded = annualExpenses - netFromPensionAndFixed - withdrawalAccessible;
 
               if (remainingNetNeeded > 0) {
                 const leftoverAccessible = accessibleNow - withdrawalAccessible;
                 const extraAccessible = Math.min(leftoverAccessible, remainingNetNeeded);
                 withdrawalAccessible += extraAccessible;
-                if (withdrawalAccessible + netFromPensionAndPassive < annualExpenses) {
+                if (withdrawalAccessible + netFromPensionAndFixed < annualExpenses) {
                   isDepleted = true;
                 }
               }

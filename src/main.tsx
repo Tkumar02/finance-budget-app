@@ -237,6 +237,7 @@ type Plan = {
     retirementTaxableFraction?: number;
     showLisaUnder60?: boolean;
     includeStatePension?: boolean;
+    annualStatePension?: number;
     showMortgageCard?: boolean;
     showAssetsCard?: boolean;
     showCoastFireCard?: boolean;
@@ -348,6 +349,7 @@ function App() {
   const [retirementTaxableFraction, setRetirementTaxableFraction] = useState(0.75);
   const [showLisaUnder60, setShowLisaUnder60] = useState(true);
   const [includeStatePension, setIncludeStatePension] = useState(true);
+  const [annualStatePension, setAnnualStatePension] = useState(12547.60);
   const [showMortgageCard, setShowMortgageCard] = useState(true);
   const [showAssetsCard, setShowAssetsCard] = useState(true);
   const [showCoastFireCard, setShowCoastFireCard] = useState(true);
@@ -451,7 +453,6 @@ function App() {
   }, [authLoading, user, savings, mortgages]);
 
   const STATE_PENSION_AGE = 67;
-  const ANNUAL_STATE_PENSION = 11502.40; // 2024/25
 
   const loadDemoScenario = (scenario: 'nurse' | 'banker' | 'plumber' | 'analyst') => {
     if (!confirmUnsavedChanges()) return;
@@ -560,6 +561,7 @@ function App() {
     retirementTaxableFraction,
     showLisaUnder60,
     includeStatePension,
+    annualStatePension,
     showMortgageCard,
     showAssetsCard,
     showCoastFireCard,
@@ -572,7 +574,7 @@ function App() {
     projectionYears, mortgages, birthYear, birthMonth, expectedOutgoings,
     drawdownRate, otherRetirementIncome, drawdownSettings, inflationRate,
     additionalRetirementExpenses, retirementTaxableFraction, showLisaUnder60,
-    includeStatePension, showMortgageCard, showAssetsCard, showCoastFireCard, swr, realGrowth,
+    includeStatePension, annualStatePension, showMortgageCard, showAssetsCard, showCoastFireCard, swr, realGrowth,
     targetCoastAge, coastTargetType
   ]);
 
@@ -666,6 +668,7 @@ function App() {
     setRetirementTaxableFraction(d.retirementTaxableFraction ?? 0.75);
     setShowLisaUnder60(d.showLisaUnder60 ?? true);
     setIncludeStatePension(d.includeStatePension ?? true);
+    setAnnualStatePension(d.annualStatePension ?? 12547.60);
     setShowMortgageCard(d.showMortgageCard ?? true);
     setShowAssetsCard(d.showAssetsCard ?? true);
     setShowCoastFireCard(d.showCoastFireCard ?? true);
@@ -697,6 +700,7 @@ function App() {
       retirementTaxableFraction: d.retirementTaxableFraction ?? 0.75,
       showLisaUnder60: d.showLisaUnder60 ?? true,
       includeStatePension: d.includeStatePension ?? true,
+      annualStatePension: d.annualStatePension ?? 12547.60,
       showMortgageCard: d.showMortgageCard ?? true,
       showCoastFireCard: d.showCoastFireCard ?? true,
       swr: d.swr ?? 4,
@@ -731,6 +735,7 @@ function App() {
       retirementTaxableFraction,
       showLisaUnder60,
       includeStatePension,
+      annualStatePension,
       showMortgageCard,
       showAssetsCard,
       showCoastFireCard,
@@ -823,6 +828,7 @@ function App() {
       retirementTaxableFraction: 0.75,
       showLisaUnder60: true,
       includeStatePension: true,
+      annualStatePension: 12547.60,
       showMortgageCard: true,
       showAssetsCard: false,
       showCoastFireCard: false,
@@ -1166,31 +1172,37 @@ const coastFireResult = useMemo(() => calculateCoastFire(
     pensionAccessAge,
     currentAccessibleWealth,
     currentLockedWealth,
-    budget.monthlyExpenses * 12, // <-- Change this to budget.monthlyExpenses * 12
+    budget.monthlyExpenses * 12,
     realGrowth,
     swr,
     annualAccessibleContribution,
     annualLockedContribution,
-    firePassiveIncome,           // <-- Change this to firePassiveIncome
-    taxSettings.taxCode,         // <-- Change this to taxSettings.taxCode
-    taxSettings.region,          // <-- Change this to taxSettings.region
-    pensionTaxMethod,            // <-- Change this to pensionTaxMethod
-    annualContributionsAtAge
+    firePassiveIncome,
+    taxSettings.taxCode,
+    taxSettings.region,
+    pensionTaxMethod,
+    annualContributionsAtAge,
+    includeStatePension,
+    STATE_PENSION_AGE,
+    annualStatePension
   ), [
     currentAge, 
     retirementAge, 
     pensionAccessAge, 
     currentAccessibleWealth, 
     currentLockedWealth, 
-    budget.monthlyExpenses,      // <-- Update dependency
+    budget.monthlyExpenses,
     annualAccessibleContribution, 
     annualLockedContribution, 
     annualContributionsAtAge, 
     realGrowth, 
     swr, 
-    firePassiveIncome,           // <-- Add dependency
-    taxSettings,                 // <-- Add dependency
-    pensionTaxMethod             // <-- Add dependency
+    firePassiveIncome,
+    taxSettings,
+    pensionTaxMethod,
+    includeStatePension,
+    STATE_PENSION_AGE,
+    annualStatePension
   ]);
 
   
@@ -1410,7 +1422,7 @@ const coastFireResult = useMemo(() => calculateCoastFire(
           annualBills={annualBills}
           setAnnualBills={setAnnualBills}
           savings={savingsForBudget}
-          mortgageOverpayment={mortgages[0].monthlyOverpayment}
+          mortgageOverpayment={mortgages[0]?.monthlyOverpayment ?? 0}
           setActiveSection={setActiveSection}
         />
       ) : null}
@@ -1466,6 +1478,9 @@ const coastFireResult = useMemo(() => calculateCoastFire(
           volatility={volatility}
           setVolatility={setVolatility}
           annualContributionsAtAge={annualContributionsAtAge}
+          includeStatePension={includeStatePension}
+          statePensionAge={STATE_PENSION_AGE}
+          annualStatePension={annualStatePension}
         />
       ) : null}
 
@@ -1516,7 +1531,8 @@ const coastFireResult = useMemo(() => calculateCoastFire(
           includeStatePension={includeStatePension}
           setIncludeStatePension={setIncludeStatePension}
           statePensionAge={STATE_PENSION_AGE}
-          annualStatePension={ANNUAL_STATE_PENSION}
+          annualStatePension={annualStatePension}
+          setAnnualStatePension={setAnnualStatePension}
           />      ) : null}
 
     </main>
@@ -1542,7 +1558,10 @@ function CoastFireSection({
   setPensionTaxMethod,
   volatility,
   setVolatility,
-  annualContributionsAtAge
+  annualContributionsAtAge,
+  includeStatePension,
+  statePensionAge,
+  annualStatePension
 }: any) {
   const [showGrowthTable, setShowGrowthTable] = useState(false);
   const [swr, setSwr] = useState(4);
@@ -1597,8 +1616,11 @@ function CoastFireSection({
     taxSettings.taxCode,
     taxSettings.region,
     pensionTaxMethod,
-    annualContributionsAtAge
-  ), [currentAge, retirementAge, pensionAccessAge, currentAccessibleBalance, currentLockedBalance, annualExpenses, realGrowth, swr, annualAccessibleContribution, annualLockedContribution, passiveIncome, taxSettings, pensionTaxMethod, annualContributionsAtAge]);
+    annualContributionsAtAge,
+    includeStatePension,
+    statePensionAge,
+    annualStatePension
+  ), [currentAge, retirementAge, pensionAccessAge, currentAccessibleBalance, currentLockedBalance, annualExpenses, realGrowth, swr, annualAccessibleContribution, annualLockedContribution, passiveIncome, taxSettings, pensionTaxMethod, annualContributionsAtAge, includeStatePension, statePensionAge, annualStatePension]);
 
   const excelPlanTable = useMemo(() => {
     return generateExcelPlanTable(
@@ -1651,8 +1673,11 @@ function CoastFireSection({
     passiveIncome,
     taxSettings.taxCode,
     taxSettings.region,
-    annualContributionsAtAge
-  ), [currentAge, pensionAccessAge, currentAccessibleBalance, currentLockedBalance, annualExpenses, realGrowth, swr, annualAccessibleContribution, annualLockedContribution, passiveIncome, taxSettings, annualContributionsAtAge]);
+    annualContributionsAtAge,
+    includeStatePension,
+    statePensionAge,
+    annualStatePension
+  ), [currentAge, pensionAccessAge, currentAccessibleBalance, currentLockedBalance, annualExpenses, realGrowth, swr, annualAccessibleContribution, annualLockedContribution, passiveIncome, taxSettings, annualContributionsAtAge, includeStatePension, statePensionAge, annualStatePension]);
 
   const grossSalaryRequired = useMemo(() => requiredGrossForNet(
     netExpenses / 12,
@@ -1713,9 +1738,13 @@ function CoastFireSection({
       volatility,
       taxSettings.taxCode,
       taxSettings.region,
-      pensionTaxMethod
+      pensionTaxMethod,
+      1000,
+      includeStatePension,
+      statePensionAge,
+      annualStatePension
     );
-  }, [cashAtRetire, isaAtRetire, giaAtRetire, pensionAtRetire, retirementAge, tableEndAge, pensionAccessAge, annualExpenses, passiveIncome, realGrowth, volatility, taxSettings, pensionTaxMethod]);
+  }, [cashAtRetire, isaAtRetire, giaAtRetire, pensionAtRetire, retirementAge, tableEndAge, pensionAccessAge, annualExpenses, passiveIncome, realGrowth, volatility, taxSettings, pensionTaxMethod, includeStatePension, statePensionAge, annualStatePension]);
 
   const fireAgeRow = fullFireResult.fullFireAge > 0
     ? potGrowthTable.find(r => r.age === Math.floor(fullFireResult.fullFireAge))
@@ -2577,6 +2606,7 @@ function RetirementSection({
   setIncludeStatePension,
   statePensionAge,
   annualStatePension,
+  setAnnualStatePension,
 }: {
   birthYear: number;
   setBirthYear: (y: number) => void;
@@ -2626,6 +2656,7 @@ function RetirementSection({
   setIncludeStatePension: (s: boolean) => void;
   statePensionAge: number;
   annualStatePension: number;
+  setAnnualStatePension: (a: number) => void;
 }) {
   const hasAnyLisa = projectedSavings.some((b: any) => b.type === 'lisa');
   const hasActiveLisa = projectedSavings.some((b: any) => b.type === 'lisa' && (drawdownSettings[b.id]?.enabled ?? true));
@@ -2826,8 +2857,8 @@ function RetirementSection({
             <NumberInput placeholder="3" value={inflationRate} onChange={setInflationRate} suffix="%" />
           </label>
         </div>
-        {retirementAge >= statePensionAge && (
-          <div style={{ marginTop: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+        <div style={{ marginTop: '16px', display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '16px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
             <input 
               type="checkbox" 
               id="includeStatePension" 
@@ -2835,10 +2866,23 @@ function RetirementSection({
               onChange={e => setIncludeStatePension(e.target.checked)} 
             />
             <label htmlFor="includeStatePension" style={{ fontSize: '0.9rem', color: '#666', fontWeight: 600 }}>
-              Entitled to full State Pension? ({money.format(annualStatePension)}/yr)
+              Entitled to State Pension?
             </label>
           </div>
-        )}
+          {includeStatePension && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <label style={{ fontSize: '0.9rem', color: '#666', fontWeight: 600 }}>
+                State Pension Amount:
+              </label>
+              <NumberInput 
+                placeholder="12547.60" 
+                value={annualStatePension} 
+                onChange={setAnnualStatePension} 
+                suffix="/yr"
+              />
+            </div>
+          )}
+        </div>
         {retirementAge < 60 && hasAnyLisa && (
           <div style={{ marginTop: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
             <input 
