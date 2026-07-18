@@ -68,6 +68,7 @@ import {
   runMonteCarloSimulation,
   MonteCarloResult,
   AnnualContributionSchedule,
+  solveMonthlyContributionForCoastAge,
 } from "./calculations";
 import "./styles.css";
 
@@ -1688,6 +1689,36 @@ function CoastFireSection({
   ), [netExpenses, taxSettings]);
 
   const currentTotalWealth = currentAccessibleBalance + currentLockedBalance;
+
+  // Extra monthly saving needed to hit Coast FIRE by targetCoastAge
+  const extraMonthlyForCoastTarget = useMemo(() => {
+    if (!targetCoastAge || targetCoastAge <= currentAge) return null;
+    if (updatedResult.isCoastFire) return 0;
+    if (updatedResult.coastFireAge > 0 && updatedResult.coastFireAge <= targetCoastAge) return 0;
+    return solveMonthlyContributionForCoastAge(
+      currentAge,
+      targetCoastAge,
+      retirementAge,
+      pensionAccessAge,
+      currentAccessibleBalance,
+      currentLockedBalance,
+      annualExpenses,
+      realGrowth,
+      swr,
+      annualAccessibleContribution,
+      annualLockedContribution,
+      passiveIncome,
+      taxSettings.taxCode,
+      taxSettings.region,
+      annualContributionsAtAge,
+      includeStatePension,
+      statePensionAge,
+      annualStatePension
+    );
+  }, [currentAge, targetCoastAge, retirementAge, pensionAccessAge, currentAccessibleBalance, currentLockedBalance,
+      annualExpenses, realGrowth, swr, annualAccessibleContribution, annualLockedContribution, passiveIncome,
+      taxSettings, annualContributionsAtAge, updatedResult.isCoastFire, updatedResult.coastFireAge,
+      includeStatePension, statePensionAge, annualStatePension]);
   
   const coastProgressPercent = updatedResult.requiredCurrentBalance > 0
     ? Math.min(100, Math.max(0, (currentTotalWealth / updatedResult.requiredCurrentBalance) * 100))
@@ -1918,6 +1949,80 @@ function CoastFireSection({
                         <span style={{ color: '#92400e', fontWeight: 600 }}>
                           ⚠ Behind target: Projected to reach Coast FIRE at age {Math.floor(updatedResult.coastFireAge)}, which is {Math.ceil(updatedResult.coastFireAge - targetCoastAge)} years after your target age {targetCoastAge}.
                         </span>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Behind-target catch-up panel */}
+                  {targetCoastAge > 0 && !updatedResult.isCoastFire &&
+                   (updatedResult.coastFireAge === -1 || updatedResult.coastFireAge > targetCoastAge) && (
+                    <div style={{
+                      marginTop: '16px',
+                      padding: '16px 18px',
+                      borderRadius: '10px',
+                      background: 'linear-gradient(135deg, #fef9ec 0%, #fff7e0 100%)',
+                      border: '1px solid #f59e0b',
+                      boxShadow: '0 2px 8px rgba(245,158,11,0.08)'
+                    }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px' }}>
+                        <span style={{ fontSize: '1.1rem' }}>🎯</span>
+                        <strong style={{ fontSize: '0.9rem', color: '#92400e' }}>Catch-up Calculator — Target Age {targetCoastAge}</strong>
+                      </div>
+                      {extraMonthlyForCoastTarget === null ? (
+                        <p style={{ margin: 0, fontSize: '0.875rem', color: '#7c3aed', fontWeight: 600 }}>
+                          ⚠️ Even contributing the maximum modelled amount, reaching Coast FIRE by age {targetCoastAge} isn't achievable with these assumptions. Consider adjusting your target age, increasing your retirement age, or reducing expenses.
+                        </p>
+                      ) : extraMonthlyForCoastTarget === 0 ? (
+                        <p style={{ margin: 0, fontSize: '0.875rem', color: '#166534', fontWeight: 600 }}>
+                          ✓ You're on track — no extra saving needed to reach Coast FIRE by age {targetCoastAge}.
+                        </p>
+                      ) : (
+                        <>
+                          <p style={{ margin: '0 0 12px', fontSize: '0.875rem', color: '#78350f', lineHeight: '1.5' }}>
+                            To reach Coast FIRE by age <strong>{targetCoastAge}</strong> you need to save an extra:
+                          </p>
+                          <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
+                            <div style={{
+                              flex: 1,
+                              minWidth: '120px',
+                              background: 'white',
+                              borderRadius: '8px',
+                              padding: '12px 14px',
+                              border: '1px solid #fcd34d',
+                              textAlign: 'center'
+                            }}>
+                              <div style={{ fontSize: '0.7rem', color: '#92400e', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '4px' }}>Per Month</div>
+                              <div style={{ fontSize: '1.5rem', fontWeight: 800, color: '#b45309' }}>{money.format(extraMonthlyForCoastTarget)}</div>
+                            </div>
+                            <div style={{
+                              flex: 1,
+                              minWidth: '120px',
+                              background: 'white',
+                              borderRadius: '8px',
+                              padding: '12px 14px',
+                              border: '1px solid #fcd34d',
+                              textAlign: 'center'
+                            }}>
+                              <div style={{ fontSize: '0.7rem', color: '#92400e', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '4px' }}>Per Year</div>
+                              <div style={{ fontSize: '1.5rem', fontWeight: 800, color: '#b45309' }}>{money.format(extraMonthlyForCoastTarget * 12)}</div>
+                            </div>
+                            <div style={{
+                              flex: 1,
+                              minWidth: '140px',
+                              background: 'white',
+                              borderRadius: '8px',
+                              padding: '12px 14px',
+                              border: '1px solid #fcd34d',
+                              textAlign: 'center'
+                            }}>
+                              <div style={{ fontSize: '0.7rem', color: '#92400e', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '4px' }}>Total Over {Math.ceil(targetCoastAge - currentAge)} Years</div>
+                              <div style={{ fontSize: '1.5rem', fontWeight: 800, color: '#b45309' }}>{money.format(extraMonthlyForCoastTarget * 12 * Math.ceil(targetCoastAge - currentAge))}</div>
+                            </div>
+                          </div>
+                          <p style={{ margin: '10px 0 0', fontSize: '0.78rem', color: '#92400e', fontStyle: 'italic' }}>
+                            This is on top of your current {money.format(annualContribution / 12)}/month saving. These figures assume a {realGrowth}% real growth rate.
+                          </p>
+                        </>
                       )}
                     </div>
                   )}

@@ -1637,6 +1637,108 @@ export function generateExcelPlanTable(
   return rows;
 }
 
+/**
+ * Solves for the additional monthly contribution needed (on top of what the user
+ * is already saving) to reach Coast FIRE by a given target age.
+ *
+ * Uses a binary search over [0, maxMonthly]. Returns null if it's not
+ * achievable even at maxMonthly contributions.
+ */
+export function solveMonthlyContributionForCoastAge(
+  currentAge: number,
+  targetCoastAge: number,
+  retirementAge: number,
+  pensionAccessAge: number,
+  currentAccessibleBalance: number,
+  currentLockedBalance: number,
+  annualExpenses: number,
+  realGrowthRate: number,
+  swr: number,
+  currentAnnualAccessibleContrib: number,
+  currentAnnualLockedContrib: number,
+  passiveIncome: number,
+  taxCode: string,
+  region: Region,
+  contributionSchedule: AnnualContributionSchedule | undefined,
+  includeStatePension: boolean,
+  statePensionAge: number,
+  statePensionAmount: number,
+  maxMonthly: number = 20000
+): number | null {
+  if (targetCoastAge <= currentAge) return null;
+
+  // Helper: simulate pot growth up to targetCoastAge with extra monthly contribution
+  const growthFactor = 1 + realGrowthRate / 100;
+
+  function projectedPotAtTargetAge(extraMonthly: number): number {
+    const extraAnnual = extraMonthly * 12;
+    let acc = currentAccessibleBalance;
+    let lock = currentLockedBalance;
+    const nextInt = Math.ceil(currentAge);
+    const firstFrac = nextInt - currentAge;
+
+    if (firstFrac > 0) {
+      const fg = Math.pow(growthFactor, firstFrac);
+      let baseContribs = contributionSchedule
+        ? contributionSchedule(currentAge)
+        : { accessible: currentAnnualAccessibleContrib, locked: currentAnnualLockedContrib };
+      acc = acc * fg + (baseContribs.accessible + extraAnnual) * firstFrac;
+      lock = lock * fg + baseContribs.locked * firstFrac;
+    }
+
+    for (let age = nextInt; age < targetCoastAge; age++) {
+      let baseContribs = contributionSchedule
+        ? contributionSchedule(age)
+        : { accessible: currentAnnualAccessibleContrib, locked: currentAnnualLockedContrib };
+      acc = acc * growthFactor + baseContribs.accessible + extraAnnual;
+      lock = lock * growthFactor + baseContribs.locked;
+    }
+    return acc + lock;
+  }
+
+  // Calculate what pot is required at targetCoastAge to fund retirement
+  const yearsCoastToRetire = Math.max(0, retirementAge - targetCoastAge);
+  const yearsCoastToAccess = Math.max(0, pensionAccessAge - targetCoastAge);
+  const netExpenses = Math.max(0, annualExpenses - passiveIncome);
+  const targetPotAtAccess = getTargetPotAtAge(
+    Math.max(targetCoastAge, pensionAccessAge),
+    pensionAccessAge,
+    statePensionAge,
+    annualExpenses,
+    passiveIncome,
+    statePensionAmount,
+    includeStatePension,
+    swr,
+    realGrowthRate,
+    taxCode,
+    region
+  );
+  const bridgeYears = Math.max(0, pensionAccessAge - retirementAge);
+  const bridgeCost = calculatePVBridge(netExpenses, realGrowthRate, bridgeYears);
+  // Required total at target coast age (discounted back from retirement)
+  const requiredAtTargetCoastAge = (bridgeCost + targetPotAtAccess / Math.pow(growthFactor, bridgeYears))
+    / Math.pow(growthFactor, yearsCoastToRetire);
+
+  // Check if already achievable with zero extra
+  if (projectedPotAtTargetAge(0) >= requiredAtTargetCoastAge) return 0;
+
+  // Check if even maxMonthly isn't enough
+  if (projectedPotAtTargetAge(maxMonthly) < requiredAtTargetCoastAge) return null;
+
+  // Binary search
+  let lo = 0;
+  let hi = maxMonthly;
+  for (let i = 0; i < 50; i++) {
+    const mid = (lo + hi) / 2;
+    if (projectedPotAtTargetAge(mid) < requiredAtTargetCoastAge) {
+      lo = mid;
+    } else {
+      hi = mid;
+    }
+  }
+  return Math.ceil(hi);
+}
+
 export function randomNormal(mean: number, stdDev: number): number {
   let u = 0, v = 0;
   while (u === 0) u = Math.random();
