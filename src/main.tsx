@@ -2766,36 +2766,37 @@ function RetirementSection({
   const hasAnyLisa = projectedSavings.some((b: any) => b.type === 'lisa');
   const hasActiveLisa = projectedSavings.some((b: any) => b.type === 'lisa' && (drawdownSettings[b.id]?.enabled ?? true));
   const currentAge = (new Date().getFullYear() - birthYear) + (new Date().getMonth() + 1 - birthMonth) / 12;
+  const [saveSurplusDrawdown, setSaveSurplusDrawdown] = useState(true);
 
   const retirementSimulation = useMemo<RetirementSimulationResult>(() => {
     const nonDbBuckets = projectedSavings.filter((bucket: any) => !bucket.isHidden && !DB_PENSION_TYPES.includes(bucket.type));
-    const accessibleParts: { value: number; rate: number }[] = [];
-    const lisaParts: { value: number; rate: number }[] = [];
-    const pensionParts: { value: number; rate: number }[] = [];
+    
+    const bucketBalances = new Map<string, number>();
+    const bucketDrawdownYears = new Map<string, number>();
+    const bucketDrawdownAmts = new Map<string, number>();
 
     nonDbBuckets.forEach((bucket: any) => {
       const value = Math.max(0, clampNumber(bucket.finalBalance ?? bucket.projected ?? 0));
-      if (value <= 0) return;
+      bucketBalances.set(bucket.id, value);
+      bucketDrawdownYears.set(bucket.id, 0);
+      bucketDrawdownAmts.set(bucket.id, 0);
+    });
 
+    let startingAccessiblePot = 0;
+    let startingLisaPot = 0;
+    let startingPensionPot = 0;
+
+    nonDbBuckets.forEach((bucket: any) => {
+      const val = bucketBalances.get(bucket.id) || 0;
       if (bucket.type === 'lisa') {
-        lisaParts.push({ value, rate: bucket.annualRate });
+        startingLisaPot += val;
       } else if (bucket.type === 'pension' || bucket.type === 'workplace-private-pension' || bucket.type === 'workplace-pension') {
-        pensionParts.push({ value, rate: bucket.annualRate });
+        startingPensionPot += val;
       } else {
-        accessibleParts.push({ value, rate: bucket.annualRate });
+        startingAccessiblePot += val;
       }
     });
 
-    let accessiblePot = accessibleParts.reduce((sum, part) => sum + part.value, 0);
-    let lisaPot = lisaParts.reduce((sum, part) => sum + part.value, 0);
-    let pensionPot = pensionParts.reduce((sum, part) => sum + part.value, 0);
-    const accessibleGrowth = weightedRate(accessibleParts);
-    const lisaGrowth = weightedRate(lisaParts);
-    const pensionGrowth = weightedRate(pensionParts);
-
-    const startingAccessiblePot = accessiblePot;
-    const startingLisaPot = lisaPot;
-    const startingPensionPot = pensionPot;
     const endAge = Math.max(95, Math.ceil(retirementAge) + 35, statePensionAge + 20);
     const rows: RetirementSimulationRow[] = [];
     let firstShortfallAge: number | null = null;
@@ -2855,66 +2856,209 @@ function RetirementSection({
 
       const baselineTax = calculateIncomeTax(fixedTaxableIncome, taxSettings.taxCode, 0, taxSettings.region).totalTax;
       const fixedNetIncome = fixedGrossIncome - baselineTax;
-      let netNeededFromPots = Math.max(0, expenses - fixedNetIncome);
-      let accessibleWithdrawal = 0;
-      let pensionWithdrawal = 0;
-      let lisaWithdrawal = 0;
 
-      const lisaCanBeUsed = age >= 60 || showLisaUnder60;
-      const usableLisaValue = lisaCanBeUsed ? lisaPot * (age < 60 ? 0.75 : 1) : 0;
-      let availableAccessibleValue = accessiblePot + usableLisaValue;
+      // Calculate planned withdrawals from all pots based on user settings
+      let plannedIsaWithdrawal = 0;
+      let plannedLisaWithdrawal = 0;
+      let plannedPensionWithdrawal = 0;
+      let plannedTaxablePensionWithdrawal = 0;
 
-      if (netNeededFromPots > 0 && availableAccessibleValue > 0) {
-        accessibleWithdrawal = Math.min(netNeededFromPots, availableAccessibleValue);
-        const fromAccessible = Math.min(accessiblePot, accessibleWithdrawal);
-        accessiblePot -= fromAccessible;
-        const remainingFromLisaValue = accessibleWithdrawal - fromAccessible;
-        if (remainingFromLisaValue > 0) {
-          const lisaReduction = age < 60 ? remainingFromLisaValue / 0.75 : remainingFromLisaValue;
-          lisaWithdrawal = remainingFromLisaValue;
-          lisaPot = Math.max(0, lisaPot - lisaReduction);
+      nonDbBuckets.forEach((bucket: any) => {
+        const settings = drawdownSettings[bucket.id] || {};
+        const effectiveWithdrawAge = settings.withdrawAge || bucket.startWithdrawalAge || 67;
+        
+        let accessible = isBucketAccessible(bucket.type, age, effectiveWithdrawAge);
+        if (bucket.type === 'lisa' && age < 60) {
+          accessible = showLisaUnder60;
         }
-        netNeededFromPots -= accessibleWithdrawal;
+
+        const isWithdrawing = accessible && (settings.rate > 0) && age >= effectiveWithdrawAge;
+
+        if (isWithdrawing) {
+          const balance = bucketBalances.get(bucket.id) || 0;
+          if (balance > 0) {
+            const rate = settings.rate ?? 4;
+            const yearIndex = bucketDrawdownYears.get(bucket.id) || 0;
+            let annualDrawdownAmt = bucketDrawdownAmts.get(bucket.id) || 0;
+            if (yearIndex === 0) {
+              annualDrawdownAmt = balance * (rate / 100);
+              bucketDrawdownAmts.set(bucket.id, annualDrawdownAmt);
+            }
+            
+            const withdrawal = Math.min(balance, annualDrawdownAmt);
+            bucketBalances.set(bucket.id, balance - withdrawal);
+            bucketDrawdownYears.set(bucket.id, yearIndex + 1);
+
+            if (bucket.type === 'lisa') {
+              plannedLisaWithdrawal += withdrawal;
+            } else if (bucket.type === 'pension' || bucket.type === 'workplace-private-pension' || bucket.type === 'workplace-pension') {
+              plannedPensionWithdrawal += withdrawal;
+              const taxableFraction = settings.lumpSumTaken ? 1.0 : 0.75;
+              plannedTaxablePensionWithdrawal += withdrawal * taxableFraction;
+            } else {
+              plannedIsaWithdrawal += withdrawal;
+            }
+          }
+        }
+      });
+
+      // Calculate net income from planned withdrawals
+      const totalTaxableIncomeSoFar = fixedTaxableIncome + plannedTaxablePensionWithdrawal;
+      const taxPaidSoFar = calculateIncomeTax(totalTaxableIncomeSoFar, taxSettings.taxCode, 0, taxSettings.region).totalTax;
+      
+      const netLisaIncome = plannedLisaWithdrawal * (age < 60 ? 0.75 : 1);
+      const totalPlannedNetIncome = fixedGrossIncome + plannedPensionWithdrawal - taxPaidSoFar + netLisaIncome + plannedIsaWithdrawal;
+
+      let netNeededFromPots = Math.max(0, expenses - totalPlannedNetIncome);
+      let additionalIsaWithdrawal = 0;
+      let additionalLisaWithdrawal = 0;
+      let additionalPensionWithdrawal = 0;
+      let additionalTaxablePensionWithdrawal = 0;
+
+      // Shortfall logic: withdraw more if planned withdrawals don't cover expenses
+      if (netNeededFromPots > 0) {
+        // a) Accessible pots (ISA/Cash)
+        nonDbBuckets.forEach((bucket: any) => {
+          if (bucket.type !== 'lisa' && bucket.type !== 'pension' && bucket.type !== 'workplace-private-pension' && bucket.type !== 'workplace-pension') {
+            const settings = drawdownSettings[bucket.id] || {};
+            const effectiveWithdrawAge = settings.withdrawAge || bucket.startWithdrawalAge || 67;
+            if (isBucketAccessible(bucket.type, age, effectiveWithdrawAge)) {
+              const balance = bucketBalances.get(bucket.id) || 0;
+              if (balance > 0 && netNeededFromPots > 0) {
+                const toWithdraw = Math.min(netNeededFromPots, balance);
+                bucketBalances.set(bucket.id, balance - toWithdraw);
+                additionalIsaWithdrawal += toWithdraw;
+                netNeededFromPots -= toWithdraw;
+              }
+            }
+          }
+        });
       }
 
-      if (netNeededFromPots > 0 && age >= pensionAccessAge && pensionPot > 0) {
+      if (netNeededFromPots > 0) {
+        // b) LISA pots
+        const lisaCanBeUsed = age >= 60 || showLisaUnder60;
+        if (lisaCanBeUsed) {
+          nonDbBuckets.forEach((bucket: any) => {
+            if (bucket.type === 'lisa') {
+              const balance = bucketBalances.get(bucket.id) || 0;
+              if (balance > 0 && netNeededFromPots > 0) {
+                const factor = age < 60 ? 0.75 : 1;
+                const usableValue = balance * factor;
+                const toWithdrawValue = Math.min(netNeededFromPots, usableValue);
+                const reduction = toWithdrawValue / factor;
+                bucketBalances.set(bucket.id, Math.max(0, balance - reduction));
+                additionalLisaWithdrawal += toWithdrawValue;
+                netNeededFromPots -= toWithdrawValue;
+              }
+            }
+          });
+        }
+      }
+
+      if (netNeededFromPots > 0 && age >= pensionAccessAge) {
+        // c) Pension pots
+        const fixedGrossIncomeForSolver = fixedGrossIncome + plannedPensionWithdrawal;
+        const fixedTaxableIncomeForSolver = fixedTaxableIncome + plannedTaxablePensionWithdrawal;
+        const accessibleWithdrawalForSolver = plannedIsaWithdrawal + plannedLisaWithdrawal * (age < 60 ? 0.75 : 1) + additionalIsaWithdrawal + additionalLisaWithdrawal;
+
         const grossNeeded = solveGrossPensionForNetTarget(
           expenses,
-          fixedGrossIncome,
-          fixedTaxableIncome,
-          accessibleWithdrawal,
+          fixedGrossIncomeForSolver,
+          fixedTaxableIncomeForSolver,
+          accessibleWithdrawalForSolver,
           taxSettings.taxCode,
           taxSettings.region
         );
-        pensionWithdrawal = Math.min(pensionPot, grossNeeded);
-        pensionPot -= pensionWithdrawal;
+
+        if (grossNeeded > 0) {
+          let remainingGrossNeeded = grossNeeded;
+          nonDbBuckets.forEach((bucket: any) => {
+            if (bucket.type === 'pension' || bucket.type === 'workplace-private-pension' || bucket.type === 'workplace-pension') {
+              const balance = bucketBalances.get(bucket.id) || 0;
+              const settings = drawdownSettings[bucket.id] || {};
+              if (balance > 0 && remainingGrossNeeded > 0) {
+                const toWithdraw = Math.min(remainingGrossNeeded, balance);
+                bucketBalances.set(bucket.id, balance - toWithdraw);
+                additionalPensionWithdrawal += toWithdraw;
+                
+                const taxableFraction = settings.lumpSumTaken ? 1.0 : 0.75;
+                additionalTaxablePensionWithdrawal += toWithdraw * taxableFraction;
+                remainingGrossNeeded -= toWithdraw;
+              }
+            }
+          });
+        }
       }
 
-      const taxablePension = pensionWithdrawal * 0.75;
-      const taxPaid = calculateIncomeTax(fixedTaxableIncome + taxablePension, taxSettings.taxCode, 0, taxSettings.region).totalTax;
+      // Surplus logic: only save surplus that comes from planned drawdowns exceeding the needed shortfall.
+      // Do not save surplus generated by guaranteed income (State Pension, DB pensions, etc.) since they are assumed spent.
+      const totalPension = plannedPensionWithdrawal + additionalPensionWithdrawal;
+      const totalTaxablePension = plannedTaxablePensionWithdrawal + additionalTaxablePensionWithdrawal;
+      const taxPaid = calculateIncomeTax(fixedTaxableIncome + totalTaxablePension, taxSettings.taxCode, 0, taxSettings.region).totalTax;
       totalTaxPaid += taxPaid;
-      const netIncome = fixedGrossIncome + accessibleWithdrawal + pensionWithdrawal - taxPaid;
+
+      const netIncome = fixedGrossIncome + (plannedIsaWithdrawal + additionalIsaWithdrawal) + (plannedLisaWithdrawal + additionalLisaWithdrawal) * (age < 60 ? 0.75 : 1) + totalPension - taxPaid;
+      
+      const netNeededFromPotsBeforeDrawdowns = Math.max(0, expenses - fixedNetIncome);
+      const netPlannedDrawdownReceived = Math.max(0, totalPlannedNetIncome - fixedNetIncome);
+      const surplus = Math.max(0, netPlannedDrawdownReceived - netNeededFromPotsBeforeDrawdowns);
+
+      if (saveSurplusDrawdown && surplus > 0) {
+        const accessibleBucket = nonDbBuckets.find(b => {
+          const settings = drawdownSettings[b.id] || {};
+          const effectiveWithdrawAge = settings.withdrawAge || b.startWithdrawalAge || 67;
+          return !b.isHidden && 
+                 isBucketAccessible(b.type, age, effectiveWithdrawAge) && 
+                 (b.type === 'isa' || b.type === 'cash');
+        });
+        if (accessibleBucket) {
+          const currentBal = bucketBalances.get(accessibleBucket.id) || 0;
+          bucketBalances.set(accessibleBucket.id, currentBal + surplus);
+        }
+      }
+
       const shortfall = Math.max(0, expenses - netIncome);
       if (shortfall > 1 && firstShortfallAge === null) firstShortfallAge = age;
+
+      // Aggregate current pot totals
+      let currentAccessiblePot = 0;
+      let currentLisaPot = 0;
+      let currentPensionPot = 0;
+
+      nonDbBuckets.forEach((bucket: any) => {
+        const bal = bucketBalances.get(bucket.id) || 0;
+        if (bucket.type === 'lisa') {
+          currentLisaPot += bal;
+        } else if (bucket.type === 'pension' || bucket.type === 'workplace-private-pension' || bucket.type === 'workplace-pension') {
+          currentPensionPot += bal;
+        } else {
+          currentAccessiblePot += bal;
+        }
+      });
 
       rows.push({
         age,
         expenses,
         fixedGrossIncome,
         taxPaid,
-        accessibleWithdrawal: accessibleWithdrawal - lisaWithdrawal,
-        pensionWithdrawal,
+        accessibleWithdrawal: plannedIsaWithdrawal + additionalIsaWithdrawal,
+        pensionWithdrawal: totalPension,
         netIncome,
         shortfall,
-        accessiblePot,
-        lisaPot,
-        pensionPot,
-        totalPot: accessiblePot + lisaPot + pensionPot,
+        accessiblePot: currentAccessiblePot,
+        lisaPot: currentLisaPot,
+        pensionPot: currentPensionPot,
+        totalPot: currentAccessiblePot + currentLisaPot + currentPensionPot,
       });
 
-      accessiblePot *= 1 + accessibleGrowth;
-      lisaPot *= 1 + lisaGrowth;
-      pensionPot *= 1 + pensionGrowth;
+      // Apply annual growth to the remaining balances of each pot using their actual growth rates
+      nonDbBuckets.forEach((bucket: any) => {
+        const bal = bucketBalances.get(bucket.id) || 0;
+        if (bal > 0) {
+          bucketBalances.set(bucket.id, bal * (1 + clampNumber(bucket.annualRate) / 100));
+        }
+      });
     }
 
     const lastRow = rows[rows.length - 1];
@@ -2928,7 +3072,7 @@ function RetirementSection({
       startingPensionPot,
       startingLisaPot,
     };
-  }, [projectedSavings, drawdownSettings, retirementAge, statePensionAge, pensionAccessAge, showLisaUnder60, summary.currentMonthlyExpenses, inflationRate, otherIncome, includeStatePension, annualStatePension, taxSettings, currentAge, nhsJobsGross, civilServiceJobsGross, teachersJobsGross, policeJobsGross, firefightersJobsGross, armedForcesJobsGross, lgpsJobsGross]);
+  }, [projectedSavings, drawdownSettings, retirementAge, statePensionAge, pensionAccessAge, showLisaUnder60, summary.currentMonthlyExpenses, inflationRate, otherIncome, includeStatePension, annualStatePension, taxSettings, currentAge, nhsJobsGross, civilServiceJobsGross, teachersJobsGross, policeJobsGross, firefightersJobsGross, armedForcesJobsGross, lgpsJobsGross, isBucketAccessible, saveSurplusDrawdown]);
 
   const firstRetirementRow = retirementSimulation.rows[0];
   const retirementStatusCovered = retirementSimulation.firstShortfallAge === null;
@@ -3313,6 +3457,8 @@ function RetirementSection({
       <section className="panel span-6">
         <DepletionChart 
           simulation={retirementSimulation}
+          saveSurplusDrawdown={saveSurplusDrawdown}
+          setSaveSurplusDrawdown={setSaveSurplusDrawdown}
         />
       </section>
     </div>
@@ -4909,7 +5055,15 @@ function MortgageSection({ mortgages, setMortgages, mortgageSummaries }: { mortg
   );
 }
 
-function DepletionChart({ simulation }: { simulation: RetirementSimulationResult }) { 
+function DepletionChart({ 
+  simulation, 
+  saveSurplusDrawdown, 
+  setSaveSurplusDrawdown 
+}: { 
+  simulation: RetirementSimulationResult; 
+  saveSurplusDrawdown: boolean; 
+  setSaveSurplusDrawdown: (s: boolean) => void 
+}) { 
   const colors = ['#2c7363', '#805ad5', '#d53f8c', '#4a5568']; 
   const startAge = simulation.rows[0]?.age || 0;
   const years = simulation.rows
@@ -4935,14 +5089,24 @@ function DepletionChart({ simulation }: { simulation: RetirementSimulationResult
   if (data[0].buckets.length === 0) return null; 
   return (
     <div className='depletion-chart' style={{ marginTop: '24px' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
-        <h3 style={{ margin: 0 }}>Pot Depletion Projection</h3>
-        <span 
-          className="tooltip-trigger" 
-          data-tooltip={`This chart now uses the same year-by-year retirement simulation as the funding analysis. It deducts actual required spending, taxes pension withdrawals, applies other income as it starts, and tracks the first shortfall age.`}
-        >
-          ⓘ
-        </span>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '10px', marginBottom: '12px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <h3 style={{ margin: 0 }}>Pot Depletion Projection</h3>
+          <span 
+            className="tooltip-trigger" 
+            data-tooltip={`This chart now uses the same year-by-year retirement simulation as the funding analysis. It deducts actual required spending, taxes pension withdrawals, applies other income as it starts, and tracks the first shortfall age.`}
+          >
+            ⓘ
+          </span>
+        </div>
+        <label style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.8rem', color: '#475569', fontWeight: 500 }}>
+          <input 
+            type="checkbox" 
+            checked={saveSurplusDrawdown} 
+            onChange={(e) => setSaveSurplusDrawdown(e.target.checked)} 
+          />
+          Save surplus drawdown to ISA/Cash
+        </label>
       </div>
       <div style={{ marginBottom: '16px', fontSize: '0.8rem', color: '#666', fontStyle: 'italic' }}>
         {simulation.firstShortfallAge === null

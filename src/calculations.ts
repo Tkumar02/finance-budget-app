@@ -486,7 +486,9 @@ export function projectSavings(buckets: SavingsBucket[], years: number, birthYea
     currentBalance: clampNumber(b.balance),
     totalContributed: clampNumber(b.balance),
     withdrawnValue: 0,
-    isWithdrawn: false
+    isWithdrawn: false,
+    drawdownAmountForYear: 0,
+    monthsInCurrentDrawdownYear: 12
   }));
 
   for (let m = 0; m < months; m++) {
@@ -550,7 +552,6 @@ export function projectSavings(buckets: SavingsBucket[], years: number, birthYea
       const effectiveStopAge = settings.useStopAge ? settings.stopAge : b.stopContributingAge;
 
       const isWithdrawing = (settings.rate > 0) && effectiveWithdrawAge && ageAtMonth >= effectiveWithdrawAge;
-      const hasStopped = (effectiveStopAge && ageAtMonth >= effectiveStopAge) || isWithdrawing;
       
       // Growth logic:
       // If we are currently in a withdrawal phase, use inflationRate as a proxy for 'real growth' 
@@ -559,16 +560,23 @@ export function projectSavings(buckets: SavingsBucket[], years: number, birthYea
       const monthlyRate = annualGrowthRate / 100 / 12;
       
       if (isWithdrawing) {
-        // Pot is in drawdown
+        b.isWithdrawn = true; // Mark as started withdrawal
         if (b.currentBalance > 0) {
-          b.isWithdrawn = true; // Mark as started withdrawal
           const rate = settings.rate ?? 4;
-          const annualDrawdownAmount = b.currentBalance * (rate / 100);
-          const monthlyDrawdown = annualDrawdownAmount / 12;
+          
+          if (b.monthsInCurrentDrawdownYear >= 12) {
+            b.drawdownAmountForYear = b.currentBalance * (rate / 100);
+            b.monthsInCurrentDrawdownYear = 0;
+          }
+          
+          const monthlyDrawdown = b.drawdownAmountForYear / 12;
           
           // Growth then withdrawal
           b.currentBalance = (b.currentBalance * (1 + monthlyRate)) - monthlyDrawdown;
-          if (b.currentBalance < 0) b.currentBalance = 0;
+          if (b.currentBalance < 0) {
+            b.currentBalance = 0;
+          }
+          b.monthsInCurrentDrawdownYear++;
         }
       } else {
         // Normal accumulation
