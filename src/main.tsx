@@ -3077,19 +3077,106 @@ function RetirementSection({
   const firstRetirementRow = retirementSimulation.rows[0];
   const retirementStatusCovered = retirementSimulation.firstShortfallAge === null;
   const firstYearShortfall = firstRetirementRow?.shortfall || 0;
-  const firstYearGrossNeeded = useMemo(() => {
-    if (firstYearShortfall <= 1) return 0;
-    let low = 0;
-    let high = Math.max(100000, firstYearShortfall * 3);
-    for (let i = 0; i < 60; i++) {
-      const mid = (low + high) / 2;
-      const tax = calculateIncomeTax(mid, taxSettings.taxCode, 0, taxSettings.region).totalTax;
-      const ni = calculateNationalInsurance(mid, "class1");
-      if (mid - tax - ni < firstYearShortfall) low = mid;
-      else high = mid;
+  // --- Richer retirement shortfall analytics ---
+  const shortfallAnalytics = useMemo(() => {
+    const rows = retirementSimulation.rows;
+    if (!rows.length) return null;
+
+    // Rows where pots have run out AND there's a shortfall
+    const shortfallRows = rows.filter(r => r.shortfall > 1);
+    if (!shortfallRows.length) return null;
+
+    const firstShortfallAge = shortfallRows[0].age;
+    const lastShortfallAge = shortfallRows[shortfallRows.length - 1].age;
+
+    // Deflate each shortfall back to today's money
+    const deflate = (amount: number, yearsFromNow: number) =>
+      amount / Math.pow(1 + inflationRate / 100, yearsFromNow);
+
+    // Average today's-money gross earnings needed across shortfall years
+    // We solve: gross - tax(gross) - NI(gross) = netShortfall (today's money)
+    const solveMonthlyGross = (annualNetShortfall: number) => {
+      if (annualNetShortfall <= 1) return 0;
+      let low = 0;
+      let high = Math.max(200000, annualNetShortfall * 4);
+      for (let i = 0; i < 60; i++) {
+        const mid = (low + high) / 2;
+        const tax = calculateIncomeTax(mid, taxSettings.taxCode, 0, taxSettings.region).totalTax;
+        const ni = calculateNationalInsurance(mid, 'class1');
+        if (mid - tax - ni < annualNetShortfall) low = mid;
+        else high = mid;
+      }
+      return high / 12;
+    };
+
+    const shortfallDetails = shortfallRows.map(r => {
+      const yearsFromNow = Math.max(0, r.age - currentAge);
+      const todayNetShortfall = deflate(r.shortfall, yearsFromNow);
+      return {
+        age: r.age,
+        todayNetShortfall,
+        monthlyGrossNeeded: solveMonthlyGross(todayNetShortfall),
+      };
+    });
+
+    const avgMonthlyGross = shortfallDetails.reduce((s, d) => s + d.monthlyGrossNeeded, 0) / shortfallDetails.length;
+    const peakMonthlyGross = Math.max(...shortfallDetails.map(d => d.monthlyGrossNeeded));
+    const totalShortfallYears = shortfallRows.length;
+
+    // Break down shortfall years by "earning phase" — identify when income sources kick in
+    // and how many shortfall years fall before/after each
+    type Phase = { label: string; fromAge: number; toAge: number; years: number; avgMonthlyGross: number };
+    const phases: Phase[] = [];
+
+    // Identify ages where guaranteed income changes (state pension, DB pensions starting)
+    const incomeChangeAges = new Set<number>();
+    incomeChangeAges.add(firstShortfallAge);
+    if (includeStatePension) incomeChangeAges.add(statePensionAge);
+    // DB pensions
+    projectedSavings.forEach((b: any) => {
+      if (DB_PENSION_TYPES.includes(b.type)) {
+        const s = drawdownSettings[b.id] || {};
+        const age = s.useWithdrawAge ? s.withdrawAge : (b.startWithdrawalAge || 67);
+        if (age > firstShortfallAge) incomeChangeAges.add(age);
+      }
+    });
+    // Other income sources
+    otherIncome.forEach((item: any) => {
+      const startAge = item.startAge || retirementAge;
+      if (startAge > firstShortfallAge) incomeChangeAges.add(startAge);
+    });
+
+    const sortedBreakpoints = Array.from(incomeChangeAges).sort((a, b) => a - b);
+    sortedBreakpoints.push(lastShortfallAge + 1); // sentinel
+
+    for (let i = 0; i < sortedBreakpoints.length - 1; i++) {
+      const from = sortedBreakpoints[i];
+      const to = sortedBreakpoints[i + 1] - 1;
+      const phaseRows = shortfallDetails.filter(d => d.age >= from && d.age <= to);
+      if (!phaseRows.length) continue;
+      const phaseAvg = phaseRows.reduce((s, d) => s + d.monthlyGrossNeeded, 0) / phaseRows.length;
+
+      // Label describing what changes at the start of this phase
+      let label = `Age ${from}–${to}`;
+      if (from === firstShortfallAge) label = `Age ${from}–${to} (pots run out)`;
+      else if (includeStatePension && from === statePensionAge) label = `Age ${from}–${to} (State Pension starts)`;
+      else {
+        const dbAtAge = projectedSavings.find((b: any) => {
+          if (!DB_PENSION_TYPES.includes(b.type)) return false;
+          const s = drawdownSettings[b.id] || {};
+          const age = s.useWithdrawAge ? s.withdrawAge : (b.startWithdrawalAge || 67);
+          return age === from;
+        });
+        const otherAtAge = otherIncome.find((item: any) => (item.startAge || retirementAge) === from);
+        if (dbAtAge) label = `Age ${from}–${to} (${dbAtAge.label || 'DB pension'} starts)`;
+        else if (otherAtAge) label = `Age ${from}–${to} (${otherAtAge.label || 'Other income'} starts)`;
+      }
+
+      phases.push({ label, fromAge: from, toAge: to, years: phaseRows.length, avgMonthlyGross: phaseAvg });
     }
-    return high / 12;
-  }, [firstYearShortfall, taxSettings]);
+
+    return { firstShortfallAge, lastShortfallAge, totalShortfallYears, avgMonthlyGross, peakMonthlyGross, phases };
+  }, [retirementSimulation.rows, inflationRate, currentAge, taxSettings, includeStatePension, statePensionAge, projectedSavings, drawdownSettings, otherIncome, retirementAge]);
 
   return (
     <div className="workspace">
@@ -3235,44 +3322,101 @@ function RetirementSection({
                   ]} />
                   
                   <div className="retirement-comparison-grid">
+                        {/* Card 1: Pot Runway / Plan Status */}
                         <div className={`metric ${retirementStatusCovered ? 'green' : 'red'}`} style={{ minHeight: 'auto', padding: '12px' }}>
                           <span style={{ fontSize: '0.75rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                            Plan Status
-                            <span className="tooltip-trigger" data-tooltip={`Simulated annually from age ${Math.ceil(retirementAge)} to ${retirementSimulation.finalAge}.`}>
+                            Pot Runway
+                            <span className="tooltip-trigger" data-tooltip={`Simulated year-by-year from age ${Math.ceil(retirementAge)} to ${retirementSimulation.finalAge}, accounting for inflation, tax, and all income sources.`}>
                               ⓘ
                             </span>
                           </span>
-                          <strong style={{ fontSize: '1.2rem' }}>{retirementStatusCovered ? 'Covered' : `Shortfall age ${retirementSimulation.firstShortfallAge}`}</strong>
+                          <strong style={{ fontSize: '1.2rem' }}>
+                            {retirementStatusCovered
+                              ? `Lasts to age ${retirementSimulation.finalAge}+`
+                              : `Runs out at age ${retirementSimulation.firstShortfallAge}`}
+                          </strong>
                           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '4px' }}>
-                            <small style={{ fontSize: '0.65rem', color: '#666' }}>Final pot at {retirementSimulation.finalAge}</small>
-                            <small style={{ fontSize: '0.7rem', fontWeight: 800 }}>{money.format(retirementSimulation.finalPot)}</small>
+                            <small style={{ fontSize: '0.65rem', color: '#666' }}>
+                              {retirementStatusCovered
+                                ? `Final pot: ${money.format(retirementSimulation.finalPot)}`
+                                : `${shortfallAnalytics?.totalShortfallYears ?? 0} yr${(shortfallAnalytics?.totalShortfallYears ?? 0) !== 1 ? 's' : ''} of shortfall`}
+                            </small>
+                            <small style={{ fontSize: '0.7rem', fontWeight: 800, color: retirementStatusCovered ? '#2c7363' : '#a7332f' }}>
+                              {retirementStatusCovered ? '✓ COVERED' : '⚠ SHORTFALL'}
+                            </small>
                           </div>
                         </div>
-                      <div className="metric isa-card green" style={{ minHeight: 'auto', padding: '12px' }}>
-                        <span style={{ fontSize: '0.75rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                          Starting Accessible/LISA
-                        </span>
-                        <strong style={{ fontSize: '1.2rem' }}>{money.format(retirementSimulation.startingAccessiblePot + retirementSimulation.startingLisaPot)}</strong>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '4px' }}>
-                          <small style={{ fontSize: '0.65rem', color: '#666' }}>LISA unlocks at age 60 unless early use is enabled</small>
+
+                        {/* Card 2: Starting pot value */}
+                        <div className="metric isa-card green" style={{ minHeight: 'auto', padding: '12px' }}>
+                          <span style={{ fontSize: '0.75rem' }}>Starting Pot at Retirement</span>
+                          <strong style={{ fontSize: '1.2rem' }}>{money.format(retirementSimulation.startingAccessiblePot + retirementSimulation.startingLisaPot + retirementSimulation.startingPensionPot)}</strong>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '4px' }}>
+                            <small style={{ fontSize: '0.65rem', color: '#666' }}>
+                              ISA/Cash: {money.format(retirementSimulation.startingAccessiblePot)} · Pension: {money.format(retirementSimulation.startingPensionPot)}
+                            </small>
+                          </div>
                         </div>
-                      </div>
-                      <div className={`metric ${firstYearGrossNeeded > 0 ? 'red' : 'green'}`} style={{ minHeight: 'auto', padding: '12px' }}>
-                        <span style={{ fontSize: '0.75rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                          Monthly Gross Earnings Needed
-                          <span className="tooltip-trigger" data-tooltip={`Only shown when the first simulated retirement year has a net shortfall after using available pots and income.`}>
-                            ⓘ
+
+                        {/* Card 3: Earnings needed — only shows if there's a shortfall */}
+                        <div className={`metric ${shortfallAnalytics ? 'red' : 'green'}`} style={{ minHeight: 'auto', padding: '12px' }}>
+                          <span style={{ fontSize: '0.75rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            Avg. Monthly Gross Needed
+                            <span className="tooltip-trigger" data-tooltip={`Estimated gross monthly earnings required to cover the shortfall once your pots run out. Figures are in today's money (inflation-adjusted back from each future year), averaged across all shortfall years.`}>
+                              ⓘ
+                            </span>
                           </span>
-                        </span>
-                        <strong style={{ fontSize: '1.2rem' }}>{monthlyMoney.format(firstYearGrossNeeded)}</strong>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '4px' }}>
-                          <small style={{ fontSize: '0.65rem', color: '#666' }}>First simulated retirement year</small>
-                          <small style={{ fontSize: '0.7rem', fontWeight: 800 }}>
-                            {firstYearGrossNeeded > 0 ? 'SHORTFALL' : 'COVERED'}
-                          </small>
+                          <strong style={{ fontSize: '1.2rem' }}>
+                            {shortfallAnalytics ? monthlyMoney.format(shortfallAnalytics.avgMonthlyGross) : '£0'}
+                          </strong>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '4px' }}>
+                            <small style={{ fontSize: '0.65rem', color: '#666' }}>
+                              {shortfallAnalytics
+                                ? `Today's money · Peak: ${monthlyMoney.format(shortfallAnalytics.peakMonthlyGross)}`
+                                : 'Pots cover full retirement'}
+                            </small>
+                            <small style={{ fontSize: '0.7rem', fontWeight: 800 }}>
+                              {shortfallAnalytics ? 'SHORTFALL' : 'COVERED'}
+                            </small>
+                          </div>
                         </div>
                       </div>
-                      </div>
+
+                      {/* Phase breakdown — only shown when there is a shortfall */}
+                      {shortfallAnalytics && shortfallAnalytics.phases.length > 0 && (
+                        <div style={{ marginTop: '16px', border: '1px solid #fecdd3', borderRadius: '8px', overflow: 'hidden' }}>
+                          <div style={{ background: '#fff1f2', padding: '10px 14px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <span style={{ fontSize: '0.8rem', fontWeight: 700, color: '#be123c' }}>⚠ Earnings Needed by Phase (Today's Money)</span>
+                            <span className="tooltip-trigger" data-tooltip="Shows how much you'd need to earn in each life phase once your pots run out. Phases change when a new income source (State Pension, DB pension, other income) starts, reducing what you need to earn.">ⓘ</span>
+                          </div>
+                          <div style={{ padding: '0' }}>
+                            {shortfallAnalytics.phases.map((phase, i) => (
+                              <div key={i} style={{
+                                display: 'grid',
+                                gridTemplateColumns: '1fr auto auto',
+                                alignItems: 'center',
+                                gap: '12px',
+                                padding: '10px 14px',
+                                borderBottom: i < shortfallAnalytics.phases.length - 1 ? '1px solid #fee2e2' : 'none',
+                                background: i % 2 === 0 ? '#fff' : '#fff8f8',
+                              }}>
+                                <div>
+                                  <div style={{ fontSize: '0.8rem', fontWeight: 600, color: '#1e293b' }}>{phase.label}</div>
+                                  <div style={{ fontSize: '0.7rem', color: '#64748b', marginTop: '2px' }}>{phase.years} yr{phase.years !== 1 ? 's' : ''} of shortfall in this phase</div>
+                                </div>
+                                <div style={{ textAlign: 'right' }}>
+                                  <div style={{ fontSize: '0.85rem', fontWeight: 700, color: '#be123c' }}>{monthlyMoney.format(phase.avgMonthlyGross)}</div>
+                                  <div style={{ fontSize: '0.65rem', color: '#64748b' }}>avg/month gross</div>
+                                </div>
+                                <div style={{
+                                  width: '8px', height: '8px', borderRadius: '50%',
+                                  background: phase.avgMonthlyGross > 3000 ? '#dc2626' : phase.avgMonthlyGross > 1000 ? '#f59e0b' : '#22c55e'
+                                }} />
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
                       </div>
                       </div>
                       </details>
