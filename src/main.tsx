@@ -1534,6 +1534,14 @@ const coastFireResult = useMemo(() => calculateCoastFire(
           statePensionAge={STATE_PENSION_AGE}
           annualStatePension={annualStatePension}
           setAnnualStatePension={setAnnualStatePension}
+          currentAge={currentAge}
+          currentAccessibleWealth={currentAccessibleWealth}
+          currentLockedWealth={currentLockedWealth}
+          annualAccessibleContribution={annualAccessibleContribution}
+          annualLockedContribution={annualLockedContribution}
+          annualContributionsAtAge={annualContributionsAtAge}
+          firePassiveIncome={firePassiveIncome}
+          projectionBuckets={projectionBuckets}
           />      ) : null}
 
     </main>
@@ -2095,7 +2103,7 @@ function CoastFireSection({
 
                 <div style={{ borderTop: '1px solid rgba(0,0,0,0.08)', paddingTop: '15px', marginTop: '10px' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', margin: '6px 0', fontSize: '0.9rem' }}>
-                    <span style={{ color: '#475569' }}>Target Pot Today:</span>
+                    <span style={{ color: '#475569' }}>Target Pot if Retiring Today:</span>
                     <strong style={{ color: '#1e293b' }}>{money.format(targetPotAtCurrentAge)}</strong>
                   </div>
                   {fullFireResult.fullFireAge > 0 && (
@@ -2661,6 +2669,133 @@ function solveGrossPensionForNetTarget(
   return high;
 }
 
+function MilestoneProjections({
+  currentAge,
+  targetCoastAge,
+  retirementAge,
+  pensionAccessAge,
+  statePensionAge,
+  includeStatePension,
+  currentAccessibleWealth,
+  currentLockedWealth,
+  annualAccessibleContribution,
+  annualLockedContribution,
+  annualExpenses,
+  taxSettings,
+  firePassiveIncome,
+  annualContributionsAtAge,
+  inflationRate,
+  projectionBuckets,
+  birthYear,
+  drawdownSettings,
+}: any) {
+  const coastResult = useMemo(() => calculateCoastFire(
+    currentAge,
+    retirementAge,
+    pensionAccessAge,
+    currentAccessibleWealth || 0,
+    currentLockedWealth || 0,
+    annualExpenses,
+    3, // assumed real return
+    4, // swr
+    annualAccessibleContribution || 0,
+    annualLockedContribution || 0,
+    firePassiveIncome || 0,
+    taxSettings?.taxCode || "1257L",
+    taxSettings?.region || "england-wales-ni",
+    'ufpls',
+    annualContributionsAtAge,
+    includeStatePension,
+    statePensionAge,
+    0
+  ), [currentAge, retirementAge, pensionAccessAge, currentAccessibleWealth, currentLockedWealth, annualExpenses, annualAccessibleContribution, annualLockedContribution, firePassiveIncome, taxSettings, annualContributionsAtAge, includeStatePension, statePensionAge]);
+
+  const milestones = [
+    { label: "Desired Coast Age", age: Math.round(targetCoastAge) },
+    { label: "Predicted Coast Age", age: coastResult.coastFireAge > 0 ? coastResult.coastFireAge : null },
+    { label: "Desired Retirement (FI)", age: Math.round(retirementAge) },
+    { label: "Predicted FI Age", age: Math.round(retirementAge) },
+    { label: "Private Pension Starts", age: pensionAccessAge },
+    ...(includeStatePension ? [{ label: "State Pension Starts", age: statePensionAge }] : [])
+  ].filter(m => m.age !== null);
+
+  const uniqueMilestones = Array.from(new Map(milestones.map(m => [m.age, m])).values()).sort((a, b) => (a.age as number) - (b.age as number));
+
+  const potAtAge = (age: number) => {
+    const years = Math.max(0, age - currentAge);
+    
+    // Check if we have the full bucket data needed
+    if (projectionBuckets && drawdownSettings) {
+      const projected = projectSavings(projectionBuckets, years, birthYear, drawdownSettings, inflationRate);
+      
+      let nominal = 0;
+      projected.forEach((b: any) => {
+        if (!b.isHidden && !DB_PENSION_TYPES.includes(b.type)) {
+          nominal += b.projected;
+        }
+      });
+      
+      // Since projectSavings returns nominal values (grown by the user-defined nominal rates), 
+      // we discount by inflation to find the "today's money" (real) value.
+      const real = nominal / Math.pow(1 + (inflationRate / 100), years);
+
+      return {
+        real: isNaN(real) ? 0 : real,
+        nominal: isNaN(nominal) ? 0 : nominal,
+        years
+      };
+    }
+
+    // Fallback if missing full bucket state
+    const realGrowth = Math.pow(1.03, years); 
+    const nominalRate = 0.03 + (inflationRate / 100);
+    const nominalGrowth = Math.pow(1 + nominalRate, years);
+    const starting = (currentAccessibleWealth || 0) + (currentLockedWealth || 0);
+    const accContrib = annualAccessibleContribution || 0;
+    const locContrib = annualLockedContribution || 0;
+    const totalContrib = accContrib + locContrib;
+    
+    const fvReal = starting * realGrowth + (totalContrib * (realGrowth - 1) / 0.03);
+    const fvNominal = starting * nominalGrowth + (totalContrib * (nominalGrowth - 1) / nominalRate);
+
+    return {
+      real: isNaN(fvReal) ? starting : fvReal,
+      nominal: isNaN(fvNominal) ? starting : fvNominal,
+      years
+    };
+  };
+
+  return (
+    <div className="milestones-section" style={{ marginTop: '24px', padding: '16px', background: '#f8fafc', borderRadius: '12px', border: '1px solid #e2e8f0' }}>
+      <h3 style={{ margin: '0 0 16px 0', fontSize: '1.1rem', color: '#0f172a' }}>Retirement Milestones Projection</h3>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: '16px' }}>
+        {uniqueMilestones.map((m, i) => {
+          const { real, nominal, years } = potAtAge(m.age as number);
+          return (
+            <div key={i} style={{ padding: '16px', background: '#fff', borderRadius: '8px', border: '1px solid #cbd5e1', boxShadow: '0 1px 2px rgba(0,0,0,0.05)' }}>
+              <div style={{ fontSize: '0.8rem', fontWeight: 600, color: '#64748b', textTransform: 'uppercase' }}>{m.label}</div>
+              <div style={{ fontSize: '1.2rem', fontWeight: 700, color: '#0f172a', margin: '4px 0' }}>Age {m.age}</div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '12px', paddingTop: '12px', borderTop: '1px solid #f1f5f9' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', flex: 1, marginRight: '8px' }}>
+                  <div style={{ fontSize: '0.7rem', color: '#64748b' }}>Real (Today's £)</div>
+                  <div style={{ fontSize: '1rem', fontWeight: 600, color: '#2563eb' }}>{money.format(real)}</div>
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', flex: 1, textAlign: 'right' }}>
+                  <div style={{ fontSize: '0.7rem', color: '#64748b' }}>Nominal (Inflated)</div>
+                  <div style={{ fontSize: '1rem', fontWeight: 600, color: '#059669' }}>{money.format(nominal)}</div>
+                </div>
+              </div>
+              <div style={{ fontSize: '0.7rem', color: '#94a3b8', marginTop: '8px', textAlign: 'center' }}>
+                In {Math.round(years)} years
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function RetirementSection({
   birthYear,
   setBirthYear,
@@ -2712,6 +2847,12 @@ function RetirementSection({
   statePensionAge,
   annualStatePension,
   setAnnualStatePension,
+  currentAccessibleWealth,
+  currentLockedWealth,
+  annualAccessibleContribution,
+  annualLockedContribution,
+  annualContributionsAtAge,
+  firePassiveIncome,
 }: {
   birthYear: number;
   setBirthYear: (y: number) => void;
@@ -2762,6 +2903,14 @@ function RetirementSection({
   statePensionAge: number;
   annualStatePension: number;
   setAnnualStatePension: (a: number) => void;
+  currentAge?: number;
+  currentAccessibleWealth?: number;
+  currentLockedWealth?: number;
+  annualAccessibleContribution?: number;
+  annualLockedContribution?: number;
+  annualContributionsAtAge?: any;
+  firePassiveIncome?: number;
+  projectionBuckets?: any[];
 }) {
   const hasAnyLisa = projectedSavings.some((b: any) => b.type === 'lisa');
   const hasActiveLisa = projectedSavings.some((b: any) => b.type === 'lisa' && (drawdownSettings[b.id]?.enabled ?? true));
@@ -3301,126 +3450,25 @@ function RetirementSection({
               </div>
             </details>
 
-            <div className="callout neutral" style={{ marginTop: '16px' }}>
-              <ResultRows rows={[
-                ["Total Selected (Today's Money)", summary.currentMonthlyExpenses],
-                [`Adjusted for Inflation (${projectionYears.toFixed(2)} yrs)`, summary.futureMonthlyExpenses],
-              ]} />
-              
-              <div style={{ marginTop: '16px', paddingTop: '16px', borderTop: '1px dashed #ccc' }}>
-                  <div className="notice" style={{ maxWidth: 'none', fontSize: '0.75rem', marginBottom: '12px' }}>
-                    This now simulates retirement year by year: taxable income, state/DB/manual income, accessible bridge money, pension access, pension tax, and the first year a shortfall appears.
-                  </div>
-
-                  <ResultRows rows={[
-                    ["First-Year Target Net", firstRetirementRow?.expenses || 0],
-                    ["Fixed Income Gross", -(firstRetirementRow?.fixedGrossIncome || 0)],
-                    ["Tax Paid", -(firstRetirementRow?.taxPaid || 0)],
-                    ["Accessible Pot Withdrawal", firstRetirementRow?.accessibleWithdrawal || 0],
-                    ["Pension Gross Withdrawal", firstRetirementRow?.pensionWithdrawal || 0],
-                    ["First-Year Shortfall", firstRetirementRow?.shortfall || 0],
-                  ]} />
-                  
-                  <div className="retirement-comparison-grid">
-                        {/* Card 1: Pot Runway / Plan Status */}
-                        <div className={`metric ${retirementStatusCovered ? 'green' : 'red'}`} style={{ minHeight: 'auto', padding: '12px' }}>
-                          <span style={{ fontSize: '0.75rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                            Pot Runway
-                            <span className="tooltip-trigger" data-tooltip={`Simulated year-by-year from age ${Math.ceil(retirementAge)} to ${retirementSimulation.finalAge}, accounting for inflation, tax, and all income sources.`}>
-                              ⓘ
-                            </span>
-                          </span>
-                          <strong style={{ fontSize: '1.2rem' }}>
-                            {retirementStatusCovered
-                              ? `Lasts to age ${retirementSimulation.finalAge}+`
-                              : `Runs out at age ${retirementSimulation.firstShortfallAge}`}
-                          </strong>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '4px' }}>
-                            <small style={{ fontSize: '0.65rem', color: '#666' }}>
-                              {retirementStatusCovered
-                                ? `Final pot: ${money.format(retirementSimulation.finalPot)}`
-                                : `${shortfallAnalytics?.totalShortfallYears ?? 0} yr${(shortfallAnalytics?.totalShortfallYears ?? 0) !== 1 ? 's' : ''} of shortfall`}
-                            </small>
-                            <small style={{ fontSize: '0.7rem', fontWeight: 800, color: retirementStatusCovered ? '#2c7363' : '#a7332f' }}>
-                              {retirementStatusCovered ? '✓ COVERED' : '⚠ SHORTFALL'}
-                            </small>
-                          </div>
-                        </div>
-
-                        {/* Card 2: Starting pot value */}
-                        <div className="metric isa-card green" style={{ minHeight: 'auto', padding: '12px' }}>
-                          <span style={{ fontSize: '0.75rem' }}>Starting Pot at Retirement</span>
-                          <strong style={{ fontSize: '1.2rem' }}>{money.format(retirementSimulation.startingAccessiblePot + retirementSimulation.startingLisaPot + retirementSimulation.startingPensionPot)}</strong>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '4px' }}>
-                            <small style={{ fontSize: '0.65rem', color: '#666' }}>
-                              ISA/Cash: {money.format(retirementSimulation.startingAccessiblePot)} · Pension: {money.format(retirementSimulation.startingPensionPot)}
-                            </small>
-                          </div>
-                        </div>
-
-                        {/* Card 3: Earnings needed — only shows if there's a shortfall */}
-                        <div className={`metric ${shortfallAnalytics ? 'red' : 'green'}`} style={{ minHeight: 'auto', padding: '12px' }}>
-                          <span style={{ fontSize: '0.75rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                            Avg. Monthly Gross Needed
-                            <span className="tooltip-trigger" data-tooltip={`Estimated gross monthly earnings required to cover the shortfall once your pots run out. Figures are in today's money (inflation-adjusted back from each future year), averaged across all shortfall years.`}>
-                              ⓘ
-                            </span>
-                          </span>
-                          <strong style={{ fontSize: '1.2rem' }}>
-                            {shortfallAnalytics ? monthlyMoney.format(shortfallAnalytics.avgMonthlyGross) : '£0'}
-                          </strong>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '4px' }}>
-                            <small style={{ fontSize: '0.65rem', color: '#666' }}>
-                              {shortfallAnalytics
-                                ? `Today's money · Peak: ${monthlyMoney.format(shortfallAnalytics.peakMonthlyGross)}`
-                                : 'Pots cover full retirement'}
-                            </small>
-                            <small style={{ fontSize: '0.7rem', fontWeight: 800 }}>
-                              {shortfallAnalytics ? 'SHORTFALL' : 'COVERED'}
-                            </small>
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Phase breakdown — only shown when there is a shortfall */}
-                      {shortfallAnalytics && shortfallAnalytics.phases.length > 0 && (
-                        <div style={{ marginTop: '16px', border: '1px solid #fecdd3', borderRadius: '8px', overflow: 'hidden' }}>
-                          <div style={{ background: '#fff1f2', padding: '10px 14px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                            <span style={{ fontSize: '0.8rem', fontWeight: 700, color: '#be123c' }}>⚠ Earnings Needed by Phase (Today's Money)</span>
-                            <span className="tooltip-trigger" data-tooltip="Shows how much you'd need to earn in each life phase once your pots run out. Phases change when a new income source (State Pension, DB pension, other income) starts, reducing what you need to earn.">ⓘ</span>
-                          </div>
-                          <div style={{ padding: '0' }}>
-                            {shortfallAnalytics.phases.map((phase, i) => (
-                              <div key={i} style={{
-                                display: 'grid',
-                                gridTemplateColumns: '1fr auto auto',
-                                alignItems: 'center',
-                                gap: '12px',
-                                padding: '10px 14px',
-                                borderBottom: i < shortfallAnalytics.phases.length - 1 ? '1px solid #fee2e2' : 'none',
-                                background: i % 2 === 0 ? '#fff' : '#fff8f8',
-                              }}>
-                                <div>
-                                  <div style={{ fontSize: '0.8rem', fontWeight: 600, color: '#1e293b' }}>{phase.label}</div>
-                                  <div style={{ fontSize: '0.7rem', color: '#64748b', marginTop: '2px' }}>{phase.years} yr{phase.years !== 1 ? 's' : ''} of shortfall in this phase</div>
-                                </div>
-                                <div style={{ textAlign: 'right' }}>
-                                  <div style={{ fontSize: '0.85rem', fontWeight: 700, color: '#be123c' }}>{monthlyMoney.format(phase.avgMonthlyGross)}</div>
-                                  <div style={{ fontSize: '0.65rem', color: '#64748b' }}>avg/month gross</div>
-                                </div>
-                                <div style={{
-                                  width: '8px', height: '8px', borderRadius: '50%',
-                                  background: phase.avgMonthlyGross > 3000 ? '#dc2626' : phase.avgMonthlyGross > 1000 ? '#f59e0b' : '#22c55e'
-                                }} />
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                      </div>
-                      </div>
-                      </details>
-                      </section>
+            <MilestoneProjections 
+              currentAge={currentAge}
+              targetCoastAge={targetCoastAge}
+              retirementAge={retirementAge}
+              pensionAccessAge={pensionAccessAge}
+              statePensionAge={statePensionAge}
+              includeStatePension={includeStatePension}
+              currentAccessibleWealth={currentAccessibleWealth}
+              currentLockedWealth={currentLockedWealth}
+              annualAccessibleContribution={annualAccessibleContribution}
+              annualLockedContribution={annualLockedContribution}
+              annualExpenses={summary.currentMonthlyExpenses * 12}
+              taxSettings={taxSettings}
+              firePassiveIncome={firePassiveIncome}
+              annualContributionsAtAge={annualContributionsAtAge}
+              inflationRate={inflationRate}
+            />
+        </details>
+      </section>
 
       <section className="panel span-12">
         <details className="disclosure-section">
@@ -3572,13 +3620,16 @@ function RetirementSection({
 
       <section className="panel span-6">
         <h2>Retirement Cost Summary</h2>
+        <div style={{ display: 'none' }}>
         <ResultRows rows={[
           ["Costs in today's money (monthly)", -summary.currentMonthlyExpenses],
           [`Costs at retirement (inflated ${projectionYears.toFixed(1)} yrs)`, -(firstRetirementRow?.expenses || 0) / 12],
           ["Avg. net income across retirement", retirementSimulation.rows.length > 0 ? retirementSimulation.rows.reduce((sum, r) => sum + r.netIncome, 0) / retirementSimulation.rows.length / 12 : 0],
           ["Final pot remaining", retirementSimulation.finalPot],
         ]} />
-        <div style={{ marginTop: '16px', fontSize: '0.85rem', borderTop: '1px solid #eee', paddingTop: '12px' }}>
+        </div>
+        <div style={{ marginTop: '0px', fontSize: '0.95rem', borderTop: '0px solid #eee', paddingTop: '0px' }}>
+
           <span style={{ fontWeight: 700, color: retirementStatusCovered ? '#2c7363' : '#a7332f' }}>
             {retirementStatusCovered
               ? `✓ Pot covers full retirement to age ${retirementSimulation.finalAge}`
