@@ -2853,6 +2853,7 @@ function RetirementSection({
   annualLockedContribution,
   annualContributionsAtAge,
   firePassiveIncome,
+  projectionBuckets,
 }: {
   birthYear: number;
   setBirthYear: (y: number) => void;
@@ -3466,6 +3467,9 @@ function RetirementSection({
               firePassiveIncome={firePassiveIncome}
               annualContributionsAtAge={annualContributionsAtAge}
               inflationRate={inflationRate}
+              projectionBuckets={projectionBuckets}
+              birthYear={birthYear}
+              drawdownSettings={drawdownSettings}
             />
         </details>
       </section>
