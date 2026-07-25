@@ -1798,6 +1798,25 @@ function CoastFireSection({
   const ppWithdrawalRow = excelPlanTable.find(row => row.phase === "FI" && (row.source === "PP" || row.source === "ISA+PP"));
   const crossoverAge = ppWithdrawalRow ? ppWithdrawalRow.age : null;
 
+  // Bridge card extras
+  const projectedAccessibleAtRetirement = retirementRow
+    ? (retirementRow.cash || 0) + (retirementRow.isa || 0) + (retirementRow.gia || 0)
+    : currentAccessibleBalance * Math.pow(1 + realGrowth / 100, Math.max(0, retirementAge - currentAge));
+  const bridgeGap = Math.max(0, updatedResult.bridgeRequired - projectedAccessibleAtRetirement);
+  // Solve extra monthly contribution to accessible pots to close bridge gap
+  const extraMonthlyForBridge = useMemo(() => {
+    if (retirementAge <= pensionAccessAge && !updatedResult.isBridgeFunded && bridgeGap > 0) {
+      const yearsToRetire = Math.max(0.01, retirementAge - currentAge);
+      const growthFactor = 1 + realGrowth / 100;
+      const fvFactor = (Math.pow(growthFactor, yearsToRetire) - 1) / (realGrowth / 100);
+      return fvFactor > 0 ? (bridgeGap / fvFactor) / 12 : 0;
+    }
+    return 0;
+  }, [retirementAge, pensionAccessAge, updatedResult.isBridgeFunded, bridgeGap, currentAge, realGrowth]);
+
+  // Full FIRE caveat: is the full FIRE age below pension access age?
+  const fullFireBeforePensionAccess = fullFireResult.fullFireAge > 0 && fullFireResult.fullFireAge < pensionAccessAge;
+
   return (
     <div className="workspace">
       <section className="panel span-12">
@@ -2099,6 +2118,24 @@ function CoastFireSection({
                         ? `Even if you keep saving ${money.format(annualContribution)}/yr, you won't reach Full FIRE by your pension access age ${pensionAccessAge}.`
                         : `If you keep saving ${money.format(annualContribution)}/yr, you can completely retire (Full FIRE) at age ${Math.floor(fullFireResult.fullFireAge)}.`)}
                   </p>
+
+                  {/* Pension access caveat */}
+                  {fullFireBeforePensionAccess && (
+                    <div style={{ padding: '10px 14px', background: '#fefce8', borderRadius: '8px', border: '1px solid #fde047', display: 'flex', alignItems: 'flex-start', gap: '8px', marginBottom: '12px' }}>
+                      <span style={{ fontSize: '1rem', marginTop: '1px' }}>⚠️</span>
+                      <div>
+                        <div style={{ fontSize: '0.8rem', fontWeight: 700, color: '#854d0e', marginBottom: '3px' }}>
+                          Pension pots included but inaccessible until age {pensionAccessAge}
+                        </div>
+                        <div style={{ fontSize: '0.77rem', color: '#713f12', lineHeight: '1.45' }}>
+                          This Full FIRE age of <strong>{Math.floor(fullFireResult.fullFireAge)}</strong> counts your pension pot in the calculation,
+                          but you legally cannot withdraw it until age {pensionAccessAge}. 
+                          You are <strong>not truly financially free</strong> at age {Math.floor(fullFireResult.fullFireAge)} — your accessible accounts (ISA / Cash)
+                          must bridge the gap independently. Check the <strong>Early Retirement Bridge</strong> card above to see if they can.
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 <div style={{ borderTop: '1px solid rgba(0,0,0,0.08)', paddingTop: '15px', marginTop: '10px' }}>
@@ -2240,25 +2277,60 @@ function CoastFireSection({
             {retirementAge < pensionAccessAge && (
               <div style={{ 
                 background: updatedResult.isBridgeFunded ? '#f0f9ff' : '#fff1f2', 
-                padding: '15px 20px', 
-                borderRadius: '8px', 
+                padding: '18px 20px', 
+                borderRadius: '10px', 
                 marginBottom: '20px',
                 border: `1px solid ${updatedResult.isBridgeFunded ? '#bae6fd' : '#fecdd3'}`,
-                display: 'flex',
-                alignItems: 'center',
-                gap: '15px'
               }}>
-                <span style={{ fontSize: '1.5rem' }}>{updatedResult.isBridgeFunded ? '✅' : '⚠️'}</span>
-                <div style={{ flex: 1 }}>
-                  <strong style={{ display: 'block', color: updatedResult.isBridgeFunded ? '#0369a1' : '#9f1239' }}>
-                    Early Retirement Bridge: {money.format(updatedResult.bridgeRequired)} required in accessible accounts
-                  </strong>
-                  <small style={{ color: '#64748b' }}>
-                    You want to retire at age {retirementAge.toFixed(0)}, but your pension pots are locked until age {pensionAccessAge}. 
-                    {updatedResult.isBridgeFunded 
-                      ? ` Your ISA/Cash pots (currently ${money.format(currentAccessibleBalance)}) are projected to grow to at least ${money.format(updatedResult.bridgeRequired)} by retirement age, which is sufficient to cover your expenses during the bridge years.`
-                      : ` Your ISA/Cash pots (currently ${money.format(currentAccessibleBalance)}) are too small and are projected to fall short. To retire at ${retirementAge.toFixed(0)}, you will need to allocate more contributions to accessible accounts like ISAs or Cash.`}
-                  </small>
+                <div style={{ display: 'flex', alignItems: 'flex-start', gap: '14px' }}>
+                  <span style={{ fontSize: '1.5rem', marginTop: '2px' }}>{updatedResult.isBridgeFunded ? '✅' : '⚠️'}</span>
+                  <div style={{ flex: 1 }}>
+                    <strong style={{ display: 'block', color: updatedResult.isBridgeFunded ? '#0369a1' : '#9f1239', fontSize: '1rem', marginBottom: '8px' }}>
+                      Early Retirement Bridge — Pension locked until age {pensionAccessAge}
+                    </strong>
+                    <p style={{ margin: '0 0 12px 0', fontSize: '0.85rem', color: '#475569', lineHeight: '1.5' }}>
+                      You want to retire at age {retirementAge.toFixed(0)}, but your pension pots cannot be accessed until age {pensionAccessAge}.
+                      Your ISA / Cash accounts must independently fund {retirementAge.toFixed(0)}→{pensionAccessAge} ({Math.round(pensionAccessAge - retirementAge)} years) before your pension unlocks.
+                    </p>
+
+                    {/* Three-column stat row */}
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '10px', marginBottom: updatedResult.isBridgeFunded ? '0' : '14px' }}>
+                      <div style={{ padding: '10px 12px', background: 'rgba(255,255,255,0.7)', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+                        <div style={{ fontSize: '0.7rem', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', marginBottom: '4px' }}>Projected Accessible Pot at Age {retirementAge.toFixed(0)}</div>
+                        <div style={{ fontSize: '1.05rem', fontWeight: 700, color: projectedAccessibleAtRetirement >= updatedResult.bridgeRequired ? '#0369a1' : '#b91c1c' }}>
+                          {money.format(projectedAccessibleAtRetirement)}
+                        </div>
+                        <div style={{ fontSize: '0.68rem', color: '#64748b', marginTop: '2px' }}>ISA + Cash + GIA only</div>
+                      </div>
+                      <div style={{ padding: '10px 12px', background: 'rgba(255,255,255,0.7)', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+                        <div style={{ fontSize: '0.7rem', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', marginBottom: '4px' }}>Bridge Required</div>
+                        <div style={{ fontSize: '1.05rem', fontWeight: 700, color: '#1e293b' }}>{money.format(updatedResult.bridgeRequired)}</div>
+                        <div style={{ fontSize: '0.68rem', color: '#64748b', marginTop: '2px' }}>PV of {Math.round(pensionAccessAge - retirementAge)} yrs of net expenses</div>
+                      </div>
+                      <div style={{ padding: '10px 12px', background: updatedResult.isBridgeFunded ? 'rgba(220,252,231,0.7)' : 'rgba(255,241,242,0.7)', borderRadius: '8px', border: `1px solid ${updatedResult.isBridgeFunded ? '#bbf7d0' : '#fecdd3'}` }}>
+                        <div style={{ fontSize: '0.7rem', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', marginBottom: '4px' }}>{updatedResult.isBridgeFunded ? 'Surplus' : 'Shortfall'}</div>
+                        <div style={{ fontSize: '1.05rem', fontWeight: 700, color: updatedResult.isBridgeFunded ? '#15803d' : '#be123c' }}>
+                          {updatedResult.isBridgeFunded
+                            ? money.format(projectedAccessibleAtRetirement - updatedResult.bridgeRequired)
+                            : money.format(bridgeGap)}
+                        </div>
+                        <div style={{ fontSize: '0.68rem', color: '#64748b', marginTop: '2px' }}>{updatedResult.isBridgeFunded ? 'Available margin' : 'Accessible pot gap'}</div>
+                      </div>
+                    </div>
+
+                    {/* Extra monthly contribution needed — only when not funded */}
+                    {!updatedResult.isBridgeFunded && extraMonthlyForBridge > 0 && (
+                      <div style={{ padding: '10px 14px', background: '#fff7ed', borderRadius: '8px', border: '1px solid #fed7aa', display: 'flex', alignItems: 'center', gap: '10px' }}>
+                        <span style={{ fontSize: '1.1rem' }}>💡</span>
+                        <div>
+                          <div style={{ fontSize: '0.82rem', fontWeight: 700, color: '#92400e' }}>To close the bridge gap by age {retirementAge.toFixed(0)}:</div>
+                          <div style={{ fontSize: '0.8rem', color: '#78350f', marginTop: '2px' }}>
+                            Redirect an extra <strong>{money.format(extraMonthlyForBridge)}/month</strong> into accessible accounts (ISA / Cash) on top of your current contributions.
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
             )}
