@@ -1799,20 +1799,42 @@ function CoastFireSection({
   const crossoverAge = ppWithdrawalRow ? ppWithdrawalRow.age : null;
 
   // Bridge card extras
-  const projectedAccessibleAtRetirement = retirementRow
-    ? (retirementRow.cash || 0) + (retirementRow.isa || 0) + (retirementRow.gia || 0)
+  const projectedAccessiblePotTable = useMemo(() => generatePotGrowthTable(
+    savings || [],
+    currentAge,
+    Math.max(currentAge, retirementAge) + 1,
+    realGrowth,
+    pensionAccessAge,
+    Infinity,
+    annualAccessibleContribution,
+    annualLockedContribution,
+    retirementAge,
+    annualExpenses,
+    passiveIncome,
+    taxSettings.taxCode,
+    taxSettings.region,
+    pensionTaxMethod
+  ), [savings, currentAge, realGrowth, pensionAccessAge, annualAccessibleContribution, annualLockedContribution, retirementAge, annualExpenses, passiveIncome, taxSettings, pensionTaxMethod]);
+
+  const actualRetirementRow = useMemo(() => projectedAccessiblePotTable.find(r => r.age === Math.floor(retirementAge)), [projectedAccessiblePotTable, retirementAge]);
+
+  const projectedAccessibleAtRetirement = actualRetirementRow
+    ? (actualRetirementRow.cash || 0) + (actualRetirementRow.isa || 0) + (actualRetirementRow.gia || 0)
     : currentAccessibleBalance * Math.pow(1 + realGrowth / 100, Math.max(0, retirementAge - currentAge));
+
   const bridgeGap = Math.max(0, updatedResult.bridgeRequired - projectedAccessibleAtRetirement);
+  const isBridgeFundedByCurrentPlan = projectedAccessibleAtRetirement >= updatedResult.bridgeRequired;
+
   // Solve extra monthly contribution to accessible pots to close bridge gap
   const extraMonthlyForBridge = useMemo(() => {
-    if (retirementAge <= pensionAccessAge && !updatedResult.isBridgeFunded && bridgeGap > 0) {
+    if (retirementAge <= pensionAccessAge && !isBridgeFundedByCurrentPlan && bridgeGap > 0) {
       const yearsToRetire = Math.max(0.01, retirementAge - currentAge);
       const growthFactor = 1 + realGrowth / 100;
       const fvFactor = (Math.pow(growthFactor, yearsToRetire) - 1) / (realGrowth / 100);
       return fvFactor > 0 ? (bridgeGap / fvFactor) / 12 : 0;
     }
     return 0;
-  }, [retirementAge, pensionAccessAge, updatedResult.isBridgeFunded, bridgeGap, currentAge, realGrowth]);
+  }, [retirementAge, pensionAccessAge, isBridgeFundedByCurrentPlan, bridgeGap, currentAge, realGrowth]);
 
   // Full FIRE caveat: is the full FIRE age below pension access age?
   const fullFireBeforePensionAccess = fullFireResult.fullFireAge > 0 && fullFireResult.fullFireAge < pensionAccessAge;
@@ -2276,16 +2298,16 @@ function CoastFireSection({
 
             {retirementAge < pensionAccessAge && (
               <div style={{ 
-                background: updatedResult.isBridgeFunded ? '#f0f9ff' : '#fff1f2', 
+                background: isBridgeFundedByCurrentPlan ? '#f0f9ff' : '#fff1f2', 
                 padding: '18px 20px', 
                 borderRadius: '10px', 
                 marginBottom: '20px',
-                border: `1px solid ${updatedResult.isBridgeFunded ? '#bae6fd' : '#fecdd3'}`,
+                border: `1px solid ${isBridgeFundedByCurrentPlan ? '#bae6fd' : '#fecdd3'}`,
               }}>
                 <div style={{ display: 'flex', alignItems: 'flex-start', gap: '14px' }}>
-                  <span style={{ fontSize: '1.5rem', marginTop: '2px' }}>{updatedResult.isBridgeFunded ? '✅' : '⚠️'}</span>
+                  <span style={{ fontSize: '1.5rem', marginTop: '2px' }}>{isBridgeFundedByCurrentPlan ? '✅' : '⚠️'}</span>
                   <div style={{ flex: 1 }}>
-                    <strong style={{ display: 'block', color: updatedResult.isBridgeFunded ? '#0369a1' : '#9f1239', fontSize: '1rem', marginBottom: '8px' }}>
+                    <strong style={{ display: 'block', color: isBridgeFundedByCurrentPlan ? '#0369a1' : '#9f1239', fontSize: '1rem', marginBottom: '8px' }}>
                       Early Retirement Bridge — Pension locked until age {pensionAccessAge}
                     </strong>
                     <p style={{ margin: '0 0 12px 0', fontSize: '0.85rem', color: '#475569', lineHeight: '1.5' }}>
@@ -2294,7 +2316,7 @@ function CoastFireSection({
                     </p>
 
                     {/* Three-column stat row */}
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '10px', marginBottom: updatedResult.isBridgeFunded ? '0' : '14px' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '10px', marginBottom: isBridgeFundedByCurrentPlan ? '0' : '14px' }}>
                       <div style={{ padding: '10px 12px', background: 'rgba(255,255,255,0.7)', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
                         <div style={{ fontSize: '0.7rem', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', marginBottom: '4px' }}>Projected Accessible Pot at Age {retirementAge.toFixed(0)}</div>
                         <div style={{ fontSize: '1.05rem', fontWeight: 700, color: projectedAccessibleAtRetirement >= updatedResult.bridgeRequired ? '#0369a1' : '#b91c1c' }}>
@@ -2307,19 +2329,19 @@ function CoastFireSection({
                         <div style={{ fontSize: '1.05rem', fontWeight: 700, color: '#1e293b' }}>{money.format(updatedResult.bridgeRequired)}</div>
                         <div style={{ fontSize: '0.68rem', color: '#64748b', marginTop: '2px' }}>PV of {Math.round(pensionAccessAge - retirementAge)} yrs of net expenses</div>
                       </div>
-                      <div style={{ padding: '10px 12px', background: updatedResult.isBridgeFunded ? 'rgba(220,252,231,0.7)' : 'rgba(255,241,242,0.7)', borderRadius: '8px', border: `1px solid ${updatedResult.isBridgeFunded ? '#bbf7d0' : '#fecdd3'}` }}>
-                        <div style={{ fontSize: '0.7rem', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', marginBottom: '4px' }}>{updatedResult.isBridgeFunded ? 'Surplus' : 'Shortfall'}</div>
-                        <div style={{ fontSize: '1.05rem', fontWeight: 700, color: updatedResult.isBridgeFunded ? '#15803d' : '#be123c' }}>
-                          {updatedResult.isBridgeFunded
+                      <div style={{ padding: '10px 12px', background: isBridgeFundedByCurrentPlan ? 'rgba(220,252,231,0.7)' : 'rgba(255,241,242,0.7)', borderRadius: '8px', border: `1px solid ${isBridgeFundedByCurrentPlan ? '#bbf7d0' : '#fecdd3'}` }}>
+                        <div style={{ fontSize: '0.7rem', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', marginBottom: '4px' }}>{isBridgeFundedByCurrentPlan ? 'Surplus' : 'Shortfall'}</div>
+                        <div style={{ fontSize: '1.05rem', fontWeight: 700, color: isBridgeFundedByCurrentPlan ? '#15803d' : '#be123c' }}>
+                          {isBridgeFundedByCurrentPlan
                             ? money.format(projectedAccessibleAtRetirement - updatedResult.bridgeRequired)
                             : money.format(bridgeGap)}
                         </div>
-                        <div style={{ fontSize: '0.68rem', color: '#64748b', marginTop: '2px' }}>{updatedResult.isBridgeFunded ? 'Available margin' : 'Accessible pot gap'}</div>
+                        <div style={{ fontSize: '0.68rem', color: '#64748b', marginTop: '2px' }}>{isBridgeFundedByCurrentPlan ? 'Available margin' : 'Accessible pot gap'}</div>
                       </div>
                     </div>
 
                     {/* Extra monthly contribution needed — only when not funded */}
-                    {!updatedResult.isBridgeFunded && extraMonthlyForBridge > 0 && (
+                    {!isBridgeFundedByCurrentPlan && extraMonthlyForBridge > 0 && (
                       <div style={{ padding: '10px 14px', background: '#fff7ed', borderRadius: '8px', border: '1px solid #fed7aa', display: 'flex', alignItems: 'center', gap: '10px' }}>
                         <span style={{ fontSize: '1.1rem' }}>💡</span>
                         <div>
