@@ -255,13 +255,27 @@ function AuthScreen() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [isSignup, setIsSignup] = useState(false);
+  const [showForm, setShowForm] = useState(false);
   const [error, setError] = useState("");
+
+  const [birthYear, setBirthYear] = useState("1990");
+  const [birthMonth, setBirthMonth] = useState("1");
+  const [taxCode, setTaxCode] = useState("1257L");
+  const [region, setRegion] = useState("england-wales-ni");
+  const [username, setUsername] = useState("");
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
     try {
       if (isSignup) {
+        localStorage.setItem('pendingSignupData', JSON.stringify({
+          birthYear: Number(birthYear),
+          birthMonth: Number(birthMonth),
+          taxCode,
+          region,
+          username
+        }));
         await createUserWithEmailAndPassword(auth, email, password);
       } else {
         await signInWithEmailAndPassword(auth, email, password);
@@ -272,25 +286,104 @@ function AuthScreen() {
   };
 
   return (
-    <div className="auth-container">
-      <div className="auth-card">
-        <h1>{isSignup ? "Create Account" : "Sign In"}</h1>
-        <form onSubmit={handleSubmit}>
-          <label>
-            Email
-            <input type="email" placeholder="you@example.com" value={email} onChange={(e) => setEmail(e.target.value)} required />
-          </label>
-          <label>
-            Password
-            <input type="password" placeholder="••••••••" value={password} onChange={(e) => setPassword(e.target.value)} required />
-          </label>
-          {error && <div className="error-notice">{error}</div>}
-          <button type="submit">{isSignup ? "Sign Up" : "Sign In"}</button>
-        </form>
-        <button className="secondary" onClick={() => setIsSignup(!isSignup)}>
-          {isSignup ? "Already have an account? Sign In" : "Need an account? Sign Up"}
+    <div className="auth-container-vertical">
+      <header className="auth-header">
+        <button 
+          className={`auth-nav-btn ${showForm && !isSignup ? 'active' : ''}`} 
+          onClick={() => { 
+            if (showForm && !isSignup) setShowForm(false);
+            else { setIsSignup(false); setShowForm(true); setError(""); }
+          }}
+        >
+          Log In
         </button>
-      </div>
+        <button 
+          className={`auth-nav-btn ${showForm && isSignup ? 'active' : ''}`} 
+          onClick={() => { 
+            if (showForm && isSignup) setShowForm(false);
+            else { setIsSignup(true); setShowForm(true); setError(""); }
+          }}
+        >
+          Sign Up
+        </button>
+      </header>
+
+      <main className="auth-main">
+        {showForm && (
+          <div className="auth-card">
+            <form onSubmit={handleSubmit}>
+              <label>
+                Email
+                <input type="email" placeholder="you@example.com" value={email} onChange={(e) => setEmail(e.target.value)} required />
+              </label>
+              <label>
+                Password
+                <input type="password" placeholder="••••••••" value={password} onChange={(e) => setPassword(e.target.value)} required />
+              </label>
+
+              {isSignup && (
+                <>
+                  <label>
+                    Username
+                    <input type="text" placeholder="" value={username} onChange={(e) => setUsername(e.target.value)} required />
+                  </label>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+                    <label>
+                      Birth Year
+                      <input type="number" min="1900" max="2100" value={birthYear} onChange={(e) => setBirthYear(e.target.value)} required />
+                    </label>
+                    <label>
+                      Birth Month
+                      <select value={birthMonth} onChange={(e) => setBirthMonth(e.target.value)} style={{ padding: '8px', borderRadius: '4px', border: '1px solid #cbd5e1' }} required>
+                        <option value="1">Jan</option><option value="2">Feb</option><option value="3">Mar</option>
+                        <option value="4">Apr</option><option value="5">May</option><option value="6">Jun</option>
+                        <option value="7">Jul</option><option value="8">Aug</option><option value="9">Sep</option>
+                        <option value="10">Oct</option><option value="11">Nov</option><option value="12">Dec</option>
+                      </select>
+                    </label>
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+                    <label>
+                      Tax Code
+                      <input type="text" value={taxCode} onChange={(e) => setTaxCode(e.target.value)} required />
+                    </label>
+                    <label>
+                      Region
+                      <select value={region} onChange={(e) => setRegion(e.target.value)} style={{ padding: '8px', borderRadius: '4px', border: '1px solid #cbd5e1' }} required>
+                        <option value="england-wales-ni">England / Wales / NI</option>
+                        <option value="scotland">Scotland</option>
+                      </select>
+                    </label>
+                  </div>
+                  <p style={{ fontSize: '0.8rem', color: '#64748b', margin: '5px 0', lineHeight: '1.4' }}>
+                    💡 Tip: Once you're signed in, go into Profile Settings (marked by the ⚙️ icon) to edit these anytime, or to view some ready-made demo accounts!
+                  </p>
+                </>
+              )}
+
+              {error && <div className="error-notice">{error}</div>}
+              <button type="submit" className="primary-auth-btn">
+                {isSignup ? "Create Account" : "Log In to Account"}
+              </button>
+            </form>
+          </div>
+        )}
+
+        <div className="auth-info-vertical">
+          <h1>Welcome to FIRE Explorer</h1>
+          <p>
+            FIRE Explorer is a comprehensive tool to help you model your financial future.
+            Calculate your Coast FIRE and Full FIRE numbers, project your net worth, 
+            and see how different scenarios affect your retirement timeline.
+          </p>
+          <ul>
+            <li>🔥 <strong>Coast FIRE:</strong> Find out exactly when you can afford to stop saving for retirement and coast to the finish line.</li>
+            <li>🧮 <strong>Tax-Aware:</strong> Accurate projections including UK tax brackets, National Insurance, and Student Loans.</li>
+            <li>🌉 <strong>Bridging the Gap:</strong> Plan your early retirement smoothly by separating accessible accounts from locked pensions.</li>
+            <li>📈 <strong>Scenario Testing:</strong> Use the built-in Monte Carlo simulations to stress-test your plan against market volatility.</li>
+          </ul>
+        </div>
+      </main>
     </div>
   );
 }
@@ -629,7 +722,70 @@ function App() {
 
   useEffect(() => {
     if (user) {
-      fetchPlans();
+      const pending = localStorage.getItem('pendingSignupData');
+      if (pending) {
+        try {
+          const data = JSON.parse(pending);
+          setBirthYear(data.birthYear);
+          setBirthMonth(data.birthMonth);
+          setTaxSettings(prev => ({ ...prev, taxCode: data.taxCode, region: data.region }));
+          
+          if (data.username) {
+            const currentMonthName = new Date().toLocaleString('default', { month: 'long' });
+            const planName = `${data.username}'s ${currentMonthName} plan`;
+            
+            const initialPlanData = {
+              paye: initialPaye,
+              selfEmployment: initialSelfEmployment,
+              taxSettings: {
+                taxCode: data.taxCode,
+                region: data.region,
+                sippNetContribution: 8506,
+              },
+              budgetLines: initialBudget,
+              annualBills: initialAnnualBills,
+              savings: initialSavings,
+              assets: [],
+              projectionYears: 10,
+              mortgages: [],
+              birthYear: data.birthYear,
+              birthMonth: data.birthMonth,
+              targetCoastAge: 50,
+              expectedOutgoings: 0,
+              drawdownRate: 4,
+              otherRetirementIncome: [],
+              drawdownSettings: {},
+              inflationRate: 3,
+              additionalRetirementExpenses: [],
+              retirementTaxableFraction: 0.75,
+              showLisaUnder60: true,
+              includeStatePension: true,
+              annualStatePension: 12547.60,
+              showMortgageCard: true,
+              showAssetsCard: false,
+              showCoastFireCard: false,
+            };
+            
+            addDoc(collection(db, "plans"), {
+              userId: user.uid,
+              name: planName,
+              data: initialPlanData,
+              updatedAt: serverTimestamp(),
+            }).then((docRef) => {
+              setCurrentPlanId(docRef.id);
+              setLastSavedData(JSON.stringify(initialPlanData));
+              fetchPlans();
+            });
+          } else {
+            fetchPlans();
+          }
+        } catch(e) {
+          fetchPlans();
+        }
+        localStorage.removeItem('pendingSignupData');
+      } else {
+        fetchPlans();
+      }
     } else {
       setPlans([]);
       setCurrentPlanId(null);
@@ -775,19 +931,24 @@ function App() {
     hasCheckedGrowth.current = false;
     setPaye(initialPaye);
     setSelfEmployment(initialSelfEmployment);
-    setTaxSettings({
-      taxCode: "1257L",
-      region: "england-wales-ni",
+    
+    // Preserve existing tax code and region, but reset SIPP contribution
+    setTaxSettings(prev => ({
+      ...prev,
       sippNetContribution: 8506,
-    });
+    }));
+    
     setBudgetLines(initialBudget);
     setAnnualBills(initialAnnualBills);
     setSavings(initialSavings);
     setAssets([]);
     setProjectionYears(10);
     setMortgages([]);
-    setBirthYear(1990);
-    setBirthMonth(1);
+    
+    // Preserve birth year and month from profile
+    // setBirthYear(birthYear); 
+    // setBirthMonth(birthMonth);
+    
     setTargetCoastAge(50);
     setExpectedOutgoings(0);
     setDrawdownRate(4);
@@ -807,8 +968,9 @@ function App() {
       paye: initialPaye,
       selfEmployment: initialSelfEmployment,
       taxSettings: {
-        taxCode: "1257L",
-        region: "england-wales-ni",
+        // preserve profile
+        taxCode: taxSettings.taxCode,
+        region: taxSettings.region,
         sippNetContribution: 8506,
       },
       budgetLines: initialBudget,
@@ -817,8 +979,9 @@ function App() {
       assets: [],
       projectionYears: 10,
       mortgages: [],
-      birthYear: 1990,
-      birthMonth: 1,
+      // preserve profile
+      birthYear: birthYear,
+      birthMonth: birthMonth,
       targetCoastAge: 50,
       expectedOutgoings: 0,
       drawdownRate: 4,
@@ -1717,7 +1880,7 @@ function CoastFireSection({
   ), [currentAge, pensionAccessAge, currentAccessibleBalance, currentLockedBalance, annualExpenses, realGrowth, swr, annualAccessibleContribution, annualLockedContribution, passiveIncome, taxSettings, annualContributionsAtAge, includeStatePension, statePensionAge, annualStatePension]);
 
   const grossSalaryRequired = useMemo(() => requiredGrossForNet(
-    netExpenses / 12,
+    12570+((netExpenses-12570)/0.72),
     taxSettings.taxCode,
     taxSettings.region,
     taxSettings.includeStudentLoan,
@@ -2182,8 +2345,8 @@ function CoastFireSection({
                         <div style={{ fontSize: '0.77rem', color: '#713f12', lineHeight: '1.45' }}>
                           This Full FIRE age of <strong>{Math.floor(fullFireResult.fullFireAge)}</strong> counts your pension pot in the calculation,
                           but you legally cannot withdraw it until age {pensionAccessAge}. 
-                          You are <strong>not truly financially free</strong> at age {Math.floor(fullFireResult.fullFireAge)} — your accessible accounts (ISA / Cash)
-                          must bridge the gap independently. Check the <strong>Early Retirement Bridge</strong> card above to see if they can.
+                          You are <strong>not truly financially free</strong> at age {Math.floor(fullFireResult.fullFireAge)} unless your accessible accounts (ISA / Cash)
+                          bridge the gap independently. 
                         </div>
                       </div>
                     </div>
@@ -2209,6 +2372,55 @@ function CoastFireSection({
                   )}
                 </div>
               </div>
+
+              {/* New Phase Breakdown Card */}
+              {(retirementAge < pensionAccessAge || (includeStatePension && statePensionAge > Math.max(retirementAge, pensionAccessAge))) && (
+                <div style={{
+                  background: 'linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%)',
+                  padding: '24px',
+                  borderRadius: '12px',
+                  border: '1px solid #cbd5e1',
+                  boxShadow: '0 4px 15px rgba(0,0,0,0.05)',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  justifyContent: 'space-between',
+                  overflowWrap: 'anywhere'
+                }}>
+                  <div>
+                    <span style={{ fontSize: '0.8rem', color: '#64748b', textTransform: 'uppercase', letterSpacing: '1px', fontWeight: 700 }}>
+                      Retirement Phase Breakdown
+                    </span>
+                    <h3 style={{ fontSize: '1.75rem', margin: '8px 0', color: '#0f172a', fontWeight: 800 }}>
+                      Target Pot Requirements
+                    </h3>
+                    
+                    <p style={{ fontSize: '0.9rem', color: '#475569', lineHeight: '1.5', margin: '15px 0' }}>
+                      To retire securely at age {retirementAge}, your required target pot is split across distinct phases depending on when your different pensions become accessible.
+                    </p>
+                  </div>
+
+                  <div style={{ borderTop: '1px solid rgba(0,0,0,0.08)', paddingTop: '15px', marginTop: '10px' }}>
+                    {retirementAge < pensionAccessAge && (
+                      <div style={{ display: 'flex', justifyContent: 'space-between', margin: '6px 0', fontSize: '0.9rem' }}>
+                        <span style={{ color: '#475569' }}>ISA Bridge (Age {retirementAge}-{pensionAccessAge}):</span>
+                        <strong style={{ color: '#1e293b' }}>{money.format(updatedResult.bridgeRequired)}</strong>
+                      </div>
+                    )}
+                    
+                    {includeStatePension && statePensionAge > Math.max(retirementAge, pensionAccessAge) && (
+                      <div style={{ display: 'flex', justifyContent: 'space-between', margin: '6px 0', fontSize: '0.9rem' }}>
+                        <span style={{ color: '#475569' }}>Pre-State Pension (Age {Math.max(retirementAge, pensionAccessAge)}-{statePensionAge}):</span>
+                        <strong style={{ color: '#1e293b' }}>{money.format(updatedResult.statePensionBridgeRequired)}</strong>
+                      </div>
+                    )}
+
+                    <div style={{ display: 'flex', justifyContent: 'space-between', margin: '6px 0', fontSize: '0.9rem' }}>
+                      <span style={{ color: '#475569' }}>Post-State Pension Pot (Age {includeStatePension ? statePensionAge : Math.max(retirementAge, pensionAccessAge)}+):</span>
+                      <strong style={{ color: '#1e293b' }}>{money.format(updatedResult.postStatePensionPot)}</strong>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
 
             <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '25px' }}>
@@ -2403,7 +2615,7 @@ function CoastFireSection({
                 <br/>
                 2. <strong>The Long-Term Phase ({pensionAccessAge} onwards):</strong> Once your pensions unlock, your combined total pots (Pensions + remaining Accessible pots) must be large enough to support you forever under a {swr}% safe withdrawal rate.
                 <br/><br/>
-                <strong>Your Coasting Income:</strong> Once you reach Coast FIRE (Age {updatedResult.coastFireAge === -1 ? "N/A" : Math.floor(updatedResult.coastFireAge)}), you no longer need to save for retirement. You only need to earn enough from work to cover your remaining net living expenses: <strong>{money.format(netExpenses)}/year net</strong> (equivalent to <strong>{money.format(grossSalaryRequired)}/year gross</strong>) in addition to your passive income of <strong>{money.format(passiveIncome)}/year</strong>.
+                <strong>Your Coasting Income:</strong> Once you reach Coast FIRE (Age {updatedResult.coastFireAge === -1 ? "N/A" : Math.floor(updatedResult.coastFireAge)}), you no longer need to save for retirement. You only need to earn enough from work to cover your remaining net living expenses: <strong>{money.format(netExpenses/12)}/month net</strong> (equivalent to <strong>{money.format(grossSalaryRequired)}/year gross</strong>) in addition to your passive income of <strong>{money.format(passiveIncome)}/year</strong>.
               </p>
             </div>
 

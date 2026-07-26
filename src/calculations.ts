@@ -794,7 +794,52 @@ export type CoastFireResult = {
   bridgeRequired: number;
   isBridgeFunded: boolean;
   coastFirePotAtAge: number;
+  statePensionBridgeRequired: number;
+  postStatePensionPot: number;
 };
+
+export function getTargetPotAtAgeDetails(
+  drawdownAge: number,
+  pensionAccessAge: number,
+  statePensionAge: number,
+  annualExpenses: number,
+  passiveIncome: number,
+  statePensionAmount: number,
+  includeStatePension: boolean,
+  swr: number,
+  realGrowthRate: number,
+  taxCode: string,
+  region: Region
+) {
+  const solvedPreState = solveGrossPensionWithdrawal(annualExpenses - passiveIncome, passiveIncome, 0.75, taxCode, region);
+  
+  if (includeStatePension && statePensionAge > drawdownAge) {
+    const growthFactor = 1 + (realGrowthRate / 100);
+    const statePensionYears = Math.max(0, statePensionAge - drawdownAge);
+    const solvedPostState = solveGrossPensionWithdrawal(
+      Math.max(0, annualExpenses - passiveIncome - statePensionAmount),
+      passiveIncome + statePensionAmount,
+      0.75,
+      taxCode,
+      region
+    );
+    const targetPotPostState = solvedPostState.grossPension / (swr / 100);
+    const pvStatePensionBridge = calculatePVBridge(solvedPreState.grossPension, realGrowthRate, statePensionYears);
+    const totalTargetPot = pvStatePensionBridge + (targetPotPostState / Math.pow(growthFactor, statePensionYears));
+    return {
+      totalTargetPot,
+      statePensionBridgeRequired: pvStatePensionBridge,
+      postStatePensionPot: targetPotPostState
+    };
+  } else {
+    const totalTargetPot = solvedPreState.grossPension / (swr / 100);
+    return {
+      totalTargetPot,
+      statePensionBridgeRequired: 0,
+      postStatePensionPot: totalTargetPot
+    };
+  }
+}
 
 export function getTargetPotAtAge(
   drawdownAge: number,
@@ -809,24 +854,19 @@ export function getTargetPotAtAge(
   taxCode: string,
   region: Region
 ): number {
-  const solvedPreState = solveGrossPensionWithdrawal(annualExpenses - passiveIncome, passiveIncome, 0.75, taxCode, region);
-  
-  if (includeStatePension) {
-    const growthFactor = 1 + (realGrowthRate / 100);
-    const statePensionYears = Math.max(0, statePensionAge - drawdownAge);
-    const solvedPostState = solveGrossPensionWithdrawal(
-      Math.max(0, annualExpenses - passiveIncome - statePensionAmount),
-      passiveIncome + statePensionAmount,
-      0.75,
-      taxCode,
-      region
-    );
-    const targetPotPostState = solvedPostState.grossPension / (swr / 100);
-    const pvStatePensionBridge = calculatePVBridge(solvedPreState.grossPension, realGrowthRate, statePensionYears);
-    return pvStatePensionBridge + (targetPotPostState / Math.pow(growthFactor, statePensionYears));
-  } else {
-    return solvedPreState.grossPension / (swr / 100);
-  }
+  return getTargetPotAtAgeDetails(
+    drawdownAge,
+    pensionAccessAge,
+    statePensionAge,
+    annualExpenses,
+    passiveIncome,
+    statePensionAmount,
+    includeStatePension,
+    swr,
+    realGrowthRate,
+    taxCode,
+    region
+  ).totalTargetPot;
 }
 
 export function calculateCoastFire(
@@ -857,7 +897,7 @@ export function calculateCoastFire(
   const bridgeCostAtRetirement = calculatePVBridge(netBridgeExpense, realGrowthRate, bridgeYears);
   
   const drawdownAgeAtAccess = Math.max(retirementAge, pensionAccessAge);
-  const targetPot = getTargetPotAtAge(
+  const targetPotDetails = getTargetPotAtAgeDetails(
     drawdownAgeAtAccess,
     pensionAccessAge,
     statePensionAge,
@@ -870,7 +910,7 @@ export function calculateCoastFire(
     taxCode,
     region
   );
-  
+  const targetPot = targetPotDetails.totalTargetPot;
   function checkStatus(acc: number, lock: number, age: number) {
     const yearsToRetire = Math.max(0, retirementAge - age);
     const accAtRetire = acc * Math.pow(growthFactor, yearsToRetire);
@@ -953,7 +993,9 @@ export function calculateCoastFire(
     yearsToCoast: coastFireAge === -1 ? -1 : Math.max(0, Math.floor(coastFireAge - currentAge)),
     bridgeRequired: bridgeCostAtRetirement,
     isBridgeFunded: statusToday.canFundBridge,
-    coastFirePotAtAge
+    coastFirePotAtAge,
+    statePensionBridgeRequired: targetPotDetails.statePensionBridgeRequired,
+    postStatePensionPot: targetPotDetails.postStatePensionPot
   };
 }
 
