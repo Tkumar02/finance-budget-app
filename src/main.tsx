@@ -1323,7 +1323,33 @@ const coastFireResult = useMemo(() => calculateCoastFire(
         </div>
       </section>
 
-      {(pendingContributions.length > 0 || pendingMortgageUpdate) && (
+      {!currentPlanId ? (
+        <div style={{ textAlign: 'center', padding: '60px 20px', background: 'linear-gradient(135deg, #fffaf1 0%, #f4f1ea 100%)', borderRadius: '16px', border: '1px solid #e7e0d5', boxShadow: '0 8px 30px rgba(0,0,0,0.04)', marginTop: '20px' }}>
+           <h2 style={{ fontSize: '2.2rem', color: '#16231f', marginBottom: '16px' }}>Welcome to Your Financial Planner</h2>
+           <p style={{ fontSize: '1.1rem', color: '#5d675f', maxWidth: '600px', margin: '0 auto 40px', lineHeight: '1.6' }}>
+             Please select an existing plan from the dropdown menu above or create a new one to get started. 
+           </p>
+           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '20px', textAlign: 'left', maxWidth: '1000px', margin: '0 auto' }}>
+              <div style={{ background: '#fff', padding: '24px', borderRadius: '12px', border: '1px solid #eee', boxShadow: '0 4px 15px rgba(0,0,0,0.03)' }}>
+                <div style={{ fontSize: '2rem', marginBottom: '12px' }}>📊</div>
+                <h3 style={{ margin: '0 0 10px 0', color: '#24594f', fontSize: '1.2rem' }}>Overview & Budgeting</h3>
+                <p style={{ margin: 0, color: '#666', fontSize: '0.95rem', lineHeight: '1.5' }}>Get a high-level summary of your monthly budget, set aside tax, and monitor your overall financial health.</p>
+              </div>
+              <div style={{ background: '#fff', padding: '24px', borderRadius: '12px', border: '1px solid #eee', boxShadow: '0 4px 15px rgba(0,0,0,0.03)' }}>
+                <div style={{ fontSize: '2rem', marginBottom: '12px' }}>💰</div>
+                <h3 style={{ margin: '0 0 10px 0', color: '#24594f', fontSize: '1.2rem' }}>Income & Taxes</h3>
+                <p style={{ margin: 0, color: '#666', fontSize: '0.95rem', lineHeight: '1.5' }}>Manage PAYE, self-employment, and other streams. Calculate tax efficiency and explore optimization strategies.</p>
+              </div>
+              <div style={{ background: '#fff', padding: '24px', borderRadius: '12px', border: '1px solid #eee', boxShadow: '0 4px 15px rgba(0,0,0,0.03)' }}>
+                <div style={{ fontSize: '2rem', marginBottom: '12px' }}>📈</div>
+                <h3 style={{ margin: '0 0 10px 0', color: '#24594f', fontSize: '1.2rem' }}>Coast FIRE & Retirement</h3>
+                <p style={{ margin: 0, color: '#666', fontSize: '0.95rem', lineHeight: '1.5' }}>Project your wealth, calculate your FIRE numbers, model drawdown strategies, and plan your pension transitions.</p>
+              </div>
+           </div>
+        </div>
+      ) : (
+        <>
+          {(pendingContributions.length > 0 || pendingMortgageUpdate) && (
         <div className="catchup-banner" style={{ background: '#fff9db', border: '1px solid #fcc419', padding: '12px', margin: '16px 20px', borderRadius: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div style={{ fontSize: '0.9rem', color: '#856404' }}>
             <strong>Wealth Tracker:</strong> 
@@ -1543,6 +1569,8 @@ const coastFireResult = useMemo(() => calculateCoastFire(
           firePassiveIncome={firePassiveIncome}
           projectionBuckets={projectionBuckets}
           />      ) : null}
+        </>
+      )}
 
     </main>
   );
@@ -1928,7 +1956,7 @@ function CoastFireSection({
           <>
             <div style={{ 
               display: 'grid', 
-              gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', 
+              gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 320px), 1fr))', 
               gap: '24px', 
               marginBottom: '25px' 
             }}>
@@ -1940,7 +1968,8 @@ function CoastFireSection({
                 boxShadow: '0 4px 15px rgba(0,0,0,0.05)',
                 display: 'flex',
                 flexDirection: 'column',
-                justifyContent: 'space-between'
+                justifyContent: 'space-between',
+                overflowWrap: 'anywhere'
               }}>
                 <div>
                   <span style={{ fontSize: '0.8rem', color: '#64748b', textTransform: 'uppercase', letterSpacing: '1px', fontWeight: 700 }}>
@@ -2113,7 +2142,8 @@ function CoastFireSection({
                 boxShadow: '0 4px 15px rgba(0,0,0,0.05)',
                 display: 'flex',
                 flexDirection: 'column',
-                justifyContent: 'space-between'
+                justifyContent: 'space-between',
+                overflowWrap: 'anywhere'
               }}>
                 <div>
                   <span style={{ fontSize: '0.8rem', color: '#64748b', textTransform: 'uppercase', letterSpacing: '1px', fontWeight: 700 }}>
@@ -2316,22 +2346,22 @@ function CoastFireSection({
                     </p>
 
                     {/* Three-column stat row */}
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '10px', marginBottom: isBridgeFundedByCurrentPlan ? '0' : '14px' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 130px), 1fr))', gap: '10px', marginBottom: isBridgeFundedByCurrentPlan ? '0' : '14px' }}>
                       <div style={{ padding: '10px 12px', background: 'rgba(255,255,255,0.7)', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
                         <div style={{ fontSize: '0.7rem', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', marginBottom: '4px' }}>Projected Accessible Pot at Age {retirementAge.toFixed(0)}</div>
-                        <div style={{ fontSize: '1.05rem', fontWeight: 700, color: projectedAccessibleAtRetirement >= updatedResult.bridgeRequired ? '#0369a1' : '#b91c1c' }}>
+                        <div style={{ fontSize: 'clamp(0.9rem, 3vw, 1.05rem)', fontWeight: 700, whiteSpace: 'nowrap', color: projectedAccessibleAtRetirement >= updatedResult.bridgeRequired ? '#0369a1' : '#b91c1c' }}>
                           {money.format(projectedAccessibleAtRetirement)}
                         </div>
                         <div style={{ fontSize: '0.68rem', color: '#64748b', marginTop: '2px' }}>ISA + Cash + GIA only</div>
                       </div>
                       <div style={{ padding: '10px 12px', background: 'rgba(255,255,255,0.7)', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
                         <div style={{ fontSize: '0.7rem', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', marginBottom: '4px' }}>Bridge Required</div>
-                        <div style={{ fontSize: '1.05rem', fontWeight: 700, color: '#1e293b' }}>{money.format(updatedResult.bridgeRequired)}</div>
+                        <div style={{ fontSize: 'clamp(0.9rem, 3vw, 1.05rem)', fontWeight: 700, whiteSpace: 'nowrap', color: '#1e293b' }}>{money.format(updatedResult.bridgeRequired)}</div>
                         <div style={{ fontSize: '0.68rem', color: '#64748b', marginTop: '2px' }}>PV of {Math.round(pensionAccessAge - retirementAge)} yrs of net expenses</div>
                       </div>
                       <div style={{ padding: '10px 12px', background: isBridgeFundedByCurrentPlan ? 'rgba(220,252,231,0.7)' : 'rgba(255,241,242,0.7)', borderRadius: '8px', border: `1px solid ${isBridgeFundedByCurrentPlan ? '#bbf7d0' : '#fecdd3'}` }}>
                         <div style={{ fontSize: '0.7rem', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', marginBottom: '4px' }}>{isBridgeFundedByCurrentPlan ? 'Surplus' : 'Shortfall'}</div>
-                        <div style={{ fontSize: '1.05rem', fontWeight: 700, color: isBridgeFundedByCurrentPlan ? '#15803d' : '#be123c' }}>
+                        <div style={{ fontSize: 'clamp(0.9rem, 3vw, 1.05rem)', fontWeight: 700, whiteSpace: 'nowrap', color: isBridgeFundedByCurrentPlan ? '#15803d' : '#be123c' }}>
                           {isBridgeFundedByCurrentPlan
                             ? money.format(projectedAccessibleAtRetirement - updatedResult.bridgeRequired)
                             : money.format(bridgeGap)}
@@ -2512,7 +2542,7 @@ function CoastFireSection({
 
             <div style={{ 
               display: 'grid', 
-              gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', 
+              gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 320px), 1fr))', 
               gap: '24px', 
               marginBottom: '25px' 
             }}>
@@ -2524,7 +2554,8 @@ function CoastFireSection({
                 boxShadow: '0 4px 15px rgba(0,0,0,0.05)',
                 display: 'flex',
                 flexDirection: 'column',
-                justifyContent: 'space-between'
+                justifyContent: 'space-between',
+                overflowWrap: 'anywhere'
               }}>
                 <div>
                   <span style={{ fontSize: '0.8rem', color: '#64748b', textTransform: 'uppercase', letterSpacing: '1px', fontWeight: 700 }}>
@@ -2560,7 +2591,8 @@ function CoastFireSection({
                 boxShadow: '0 4px 15px rgba(0,0,0,0.05)',
                 display: 'flex',
                 flexDirection: 'column',
-                justifyContent: 'space-between'
+                justifyContent: 'space-between',
+                overflowWrap: 'anywhere'
               }}>
                 <div>
                   <span style={{ fontSize: '0.8rem', color: '#64748b', textTransform: 'uppercase', letterSpacing: '1px', fontWeight: 700 }}>
