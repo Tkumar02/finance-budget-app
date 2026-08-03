@@ -264,6 +264,16 @@ function AuthScreen() {
   const [region, setRegion] = useState("england-wales-ni");
   const [username, setUsername] = useState("");
 
+  const [targetRetirementAge, setTargetRetirementAge] = useState("65");
+  const [targetCoastAge, setTargetCoastAge] = useState("");
+  const [wantsMortgage, setWantsMortgage] = useState(false);
+  const [mortgageBalance, setMortgageBalance] = useState("");
+  const [mortgageYears, setMortgageYears] = useState("25");
+  const [mortgageRate, setMortgageRate] = useState("4.5");
+  const [mortgageMonthlyPayment, setMortgageMonthlyPayment] = useState("");
+  const [wantsAssets, setWantsAssets] = useState(false);
+  const [assetValue, setAssetValue] = useState("");
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
@@ -274,7 +284,14 @@ function AuthScreen() {
           birthMonth: Number(birthMonth),
           taxCode,
           region,
-          username
+          username,
+          targetRetirementAge: Number(targetRetirementAge),
+          targetCoastAge: targetCoastAge ? Number(targetCoastAge) : null,
+          mortgageBalance: (wantsMortgage && mortgageBalance && mortgageYears && mortgageRate && mortgageMonthlyPayment) ? Number(mortgageBalance) : null,
+          mortgageYears: (wantsMortgage && mortgageBalance && mortgageYears && mortgageRate && mortgageMonthlyPayment) ? Number(mortgageYears) : null,
+          mortgageRate: (wantsMortgage && mortgageBalance && mortgageYears && mortgageRate && mortgageMonthlyPayment) ? Number(mortgageRate) : null,
+          mortgageMonthlyPayment: (wantsMortgage && mortgageBalance && mortgageYears && mortgageRate && mortgageMonthlyPayment) ? Number(mortgageMonthlyPayment) : null,
+          assetValue: (wantsAssets && assetValue) ? Number(assetValue) : null
         }));
         await createUserWithEmailAndPassword(auth, email, password);
       } else {
@@ -355,8 +372,47 @@ function AuthScreen() {
                       </select>
                     </label>
                   </div>
-                  <p style={{ fontSize: '0.8rem', color: '#64748b', margin: '5px 0', lineHeight: '1.4' }}>
-                    💡 Tip: Once you're signed in, go into Profile Settings (marked by the ⚙️ icon) to edit these anytime, or to view some ready-made demo accounts!
+                  
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginTop: '16px' }}>
+                    <label>
+                      Retirement Age
+                      <input type="number" min="30" max="100" value={targetRetirementAge} onChange={(e) => setTargetRetirementAge(e.target.value)} required />
+                    </label>
+                    <label>
+                      COAST Age (Optional)
+                      <input type="number" min="30" max="100" value={targetCoastAge} onChange={(e) => setTargetCoastAge(e.target.value)} placeholder="Leave blank to hide" />
+                    </label>
+                  </div>
+
+                  <div style={{ marginTop: '16px', padding: '12px', background: '#f8fafc', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 'bold', margin: 0, cursor: 'pointer' }}>
+                      <input type="checkbox" checked={wantsMortgage} onChange={(e) => setWantsMortgage(e.target.checked)} style={{ width: 'auto' }} />
+                      Include Mortgage Details?
+                    </label>
+                    {wantsMortgage && (
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '10px', marginTop: '12px' }}>
+                        <label style={{ fontSize: '0.85rem' }}>Balance (£)<input type="number" value={mortgageBalance} onChange={(e) => setMortgageBalance(e.target.value)} style={{ padding: '6px' }} /></label>
+                        <label style={{ fontSize: '0.85rem' }}>Years<input type="number" value={mortgageYears} onChange={(e) => setMortgageYears(e.target.value)} style={{ padding: '6px' }} /></label>
+                        <label style={{ fontSize: '0.85rem' }}>Rate (%)<input type="number" step="0.1" value={mortgageRate} onChange={(e) => setMortgageRate(e.target.value)} style={{ padding: '6px' }} /></label>
+                        <label style={{ fontSize: '0.85rem' }}>Monthly (£)<input type="number" value={mortgageMonthlyPayment} onChange={(e) => setMortgageMonthlyPayment(e.target.value)} style={{ padding: '6px' }} /></label>
+                      </div>
+                    )}
+                  </div>
+
+                  <div style={{ marginTop: '12px', marginBottom: '16px', padding: '12px', background: '#f8fafc', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 'bold', margin: 0, cursor: 'pointer' }}>
+                      <input type="checkbox" checked={wantsAssets} onChange={(e) => setWantsAssets(e.target.checked)} style={{ width: 'auto' }} />
+                      Include Assets?
+                    </label>
+                    {wantsAssets && (
+                      <div style={{ marginTop: '12px' }}>
+                        <label style={{ fontSize: '0.85rem' }}>Asset Value (£)<input type="number" value={assetValue} onChange={(e) => setAssetValue(e.target.value)} style={{ padding: '6px' }} /></label>
+                      </div>
+                    )}
+                  </div>
+
+                  <p style={{ fontSize: '0.8rem', color: '#64748b', margin: '5px 0', lineHeight: '1.4', background: '#e0f2fe', padding: '8px', borderRadius: '6px' }}>
+                    💡 Tip: You can skip the optional details now. Once signed in, go into Profile Settings (⚙️) anytime to add or edit your COAST, Mortgage, and Asset details!
                   </p>
                 </>
               )}
@@ -734,6 +790,10 @@ function App() {
             const currentMonthName = new Date().toLocaleString('default', { month: 'long' });
             const planName = `${data.username}'s ${currentMonthName} plan`;
             
+            const currentYear = new Date().getFullYear();
+            const calculatedCurrentAge = currentYear - data.birthYear;
+            const projYears = Math.max(0, (data.targetRetirementAge || 65) - calculatedCurrentAge);
+
             const initialPlanData = {
               paye: initialPaye,
               selfEmployment: initialSelfEmployment,
@@ -745,12 +805,33 @@ function App() {
               budgetLines: initialBudget,
               annualBills: initialAnnualBills,
               savings: initialSavings,
-              assets: [],
-              projectionYears: 10,
-              mortgages: [],
+              assets: data.assetValue !== null ? [{
+                id: uid(),
+                type: 'property',
+                value: data.assetValue,
+                label: 'Asset',
+                appreciationRate: 2
+              }] : [],
+              projectionYears: projYears,
+              mortgages: data.mortgageBalance !== null ? (() => {
+                const userRate = data.mortgageRate || 4.5;
+                const monthlyRate = userRate / 100 / 12;
+                const numPayments = data.mortgageYears * 12;
+                const standardPayment = numPayments > 0 ? (data.mortgageBalance * monthlyRate) / (1 - Math.pow(1 + monthlyRate, -numPayments)) : 0;
+                const overpayment = data.mortgageMonthlyPayment > standardPayment ? data.mortgageMonthlyPayment - standardPayment : 0;
+                return [{
+                  amount: data.mortgageBalance,
+                  annualRate: userRate,
+                  years: data.mortgageYears,
+                  monthlyOverpayment: overpayment,
+                  oneOffMonth: 0,
+                  oneOffAmount: 0,
+                  paymentDay: 1,
+                }];
+              })() : [],
               birthYear: data.birthYear,
               birthMonth: data.birthMonth,
-              targetCoastAge: 50,
+              targetCoastAge: data.targetCoastAge || 50,
               expectedOutgoings: 0,
               drawdownRate: 4,
               otherRetirementIncome: [],
@@ -761,9 +842,9 @@ function App() {
               showLisaUnder60: true,
               includeStatePension: true,
               annualStatePension: 12547.60,
-              showMortgageCard: true,
-              showAssetsCard: false,
-              showCoastFireCard: false,
+              showMortgageCard: data.mortgageBalance !== null,
+              showAssetsCard: data.assetValue !== null,
+              showCoastFireCard: data.targetCoastAge !== null,
             };
             
             addDoc(collection(db, "plans"), {
@@ -774,6 +855,34 @@ function App() {
             }).then((docRef) => {
               setCurrentPlanId(docRef.id);
               setLastSavedData(JSON.stringify(initialPlanData));
+              
+              // Apply to React state immediately so UI updates
+              setPaye(initialPlanData.paye);
+              setSelfEmployment(initialPlanData.selfEmployment);
+              setTaxSettings(initialPlanData.taxSettings);
+              setBudgetLines(initialPlanData.budgetLines);
+              setAnnualBills(initialPlanData.annualBills);
+              setSavings(initialPlanData.savings);
+              setAssets(initialPlanData.assets);
+              setProjectionYears(initialPlanData.projectionYears);
+              setMortgages(initialPlanData.mortgages);
+              setBirthYear(initialPlanData.birthYear);
+              setBirthMonth(initialPlanData.birthMonth);
+              setTargetCoastAge(initialPlanData.targetCoastAge);
+              setExpectedOutgoings(initialPlanData.expectedOutgoings);
+              setDrawdownRate(initialPlanData.drawdownRate);
+              setOtherRetirementIncome(initialPlanData.otherRetirementIncome);
+              setDrawdownSettings(initialPlanData.drawdownSettings);
+              setInflationRate(initialPlanData.inflationRate);
+              setAdditionalRetirementExpenses(initialPlanData.additionalRetirementExpenses);
+              setRetirementTaxableFraction(initialPlanData.retirementTaxableFraction);
+              setShowLisaUnder60(initialPlanData.showLisaUnder60);
+              setIncludeStatePension(initialPlanData.includeStatePension);
+              setAnnualStatePension(initialPlanData.annualStatePension);
+              setShowMortgageCard(initialPlanData.showMortgageCard);
+              setShowAssetsCard(initialPlanData.showAssetsCard);
+              setShowCoastFireCard(initialPlanData.showCoastFireCard);
+              
               fetchPlans();
             });
           } else {
@@ -925,8 +1034,25 @@ function App() {
     }
   };
 
-  const createNewPlan = () => {
+  const createNewPlan = async (eOrManual?: any) => {
+    const isManual = typeof eOrManual === 'boolean' ? eOrManual : true;
+
+    if (isManual) {
+      if (!user) {
+        alert("Please sign in to create a plan.");
+        return;
+      }
+    }
+
     if (!confirmUnsavedChanges()) return;
+
+    let newPlanName = null;
+    if (isManual) {
+      const name = prompt("Enter a name for your new plan:");
+      if (!name) return;
+      newPlanName = name;
+    }
+
     setCurrentPlanId(null);
     hasCheckedGrowth.current = false;
     setPaye(initialPaye);
@@ -997,6 +1123,24 @@ function App() {
       showAssetsCard: false,
       showCoastFireCard: false,
     });
+
+    if (isManual && newPlanName) {
+      try {
+        const docRef = await addDoc(collection(db, "plans"), {
+          userId: user!.uid,
+          name: newPlanName,
+          data: JSON.parse(newDataString),
+          updatedAt: serverTimestamp(),
+        });
+        setCurrentPlanId(docRef.id);
+        fetchPlans();
+        alert("New plan created!");
+      } catch (e) {
+        console.error("Error creating plan:", e);
+        alert("Error creating plan.");
+      }
+    }
+
     setLastSavedData(newDataString);
   };
 
@@ -1007,7 +1151,7 @@ function App() {
     setCurrentPlanId(null);
     fetchPlans();
     alert("Plan deleted.");
-    createNewPlan();
+    createNewPlan(false);
   };
 
   const totalSippNet = useMemo(() => {
@@ -4432,7 +4576,7 @@ function IncomeSection({
               title="Self-Employment Income"
               actionLabel="Add SE Stream"
               onAction={() =>
-                setSelfEmployment([...selfEmployment, { id: uid(), label: "New SE source", gross: 0, expenses: [], isNiLiable: true }])
+                setSelfEmployment([...selfEmployment, { id: uid(), label: "New SE source", gross: 0, expenses: [], isNiLiable: true, isSubjectToTax: true }])
               }
             />
           </summary>
@@ -4448,9 +4592,13 @@ function IncomeSection({
                     <label>Annual Gross Revenue
                       <NumberInput placeholder="0" value={stream.gross} onChange={(gross) => setSelfEmployment(updateItem(selfEmployment, stream.id, { gross }))} />
                     </label>
-                    <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', marginTop: '8px' }}>
                       <input type="checkbox" checked={stream.isNiLiable ?? true} onChange={(e) => setSelfEmployment(updateItem(selfEmployment, stream.id, { isNiLiable: e.target.checked }))} />
                       <span style={{ fontSize: '0.85rem' }}>Liable for Class 4 NI?</span>
+                    </label>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', marginTop: '4px' }}>
+                      <input type="checkbox" checked={stream.isSubjectToTax ?? true} onChange={(e) => setSelfEmployment(updateItem(selfEmployment, stream.id, { isSubjectToTax: e.target.checked }))} />
+                      <span style={{ fontSize: '0.85rem' }}>Subject to Income Tax?</span>
                     </label>
 
                     <div className="mini-expenses">
@@ -4738,17 +4886,17 @@ function SettingsSection({
         </div>
         <div style={{ marginTop: '20px', borderTop: '1px solid #eee', paddingTop: '20px' }}>
           <h3>Dashboard Layout</h3>
-          <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', marginTop: '8px' }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', marginTop: '8px' }} title="Toggle this to add and track your mortgage balance and monthly payments">
             <input type="checkbox" checked={showMortgageCard} onChange={(e) => setShowMortgageCard(e.target.checked)} />
-            Show Mortgage Card
+            Show Mortgage Card <span style={{ fontSize: '0.8rem' }}>ℹ️</span>
           </label>
-          <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', marginTop: '8px' }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', marginTop: '8px' }} title="Toggle this to track the value of your properties or other large assets">
             <input type="checkbox" checked={showAssetsCard} onChange={(e) => setShowAssetsCard(e.target.checked)} />
-            Show Assets Card
+            Show Assets Card <span style={{ fontSize: '0.8rem' }}>ℹ️</span>
           </label>
-          <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', marginTop: '8px' }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', marginTop: '8px' }} title="Toggle this to estimate when you have enough saved to stop contributing and let compounding reach your retirement goal">
             <input type="checkbox" checked={showCoastFireCard} onChange={(e) => setShowCoastFireCard(e.target.checked)} />
-            Show Coast FIRE Card
+            Show Coast FIRE Card <span style={{ fontSize: '0.8rem' }}>ℹ️</span>
           </label>
         </div>
         <div className="callout neutral">
@@ -4792,10 +4940,10 @@ function SettingsSection({
   );
 }
 
-function calculateJobNet(gross: number, type: "class1" | "class4", taxSettings: TaxSettings) {
-  const taxable = gross; // Simplified
-  const tax = calculateIncomeTax(taxable, taxSettings.taxCode, 0, taxSettings.region).totalTax;
-  const ni = calculateNationalInsurance(gross, type);
+function calculateJobNet(gross: number, type: "class1" | "class4", taxSettings: TaxSettings, isSubjectToTax = true, isNiLiable = true) {
+  const taxable = isSubjectToTax ? gross : 0; // Simplified
+  const tax = isSubjectToTax ? calculateIncomeTax(taxable, taxSettings.taxCode, 0, taxSettings.region).totalTax : 0;
+  const ni = isNiLiable ? calculateNationalInsurance(gross, type) : 0;
   return gross - tax - ni;
 }
 
@@ -4821,7 +4969,7 @@ function IncomePie({ paye, selfEmployment, taxSettings }: { paye: PayeIncome[], 
     })),
     ...selfEmployment.map((s, i) => ({ 
       label: s.label, 
-      value: calculateJobNet(s.gross, "class4", taxSettings), 
+      value: calculateJobNet(s.gross, "class4", taxSettings, s.isSubjectToTax ?? true, s.isNiLiable ?? true), 
       color: palette[(i + paye.length) % palette.length] 
     }))
   ].filter(s => s.value > 0);

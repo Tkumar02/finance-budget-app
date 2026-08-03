@@ -25,6 +25,7 @@ export type SelfEmployment = {
   gross: number;
   expenses: ExpenseLine[];
   isNiLiable?: boolean;
+  isSubjectToTax?: boolean;
 };
 
 export type BudgetLine = ExpenseLine & {
@@ -347,6 +348,11 @@ export function calculateTaxSummary(incomes: PayeIncome[], streams: SelfEmployme
   
   // Self employment profit
   const selfProfit = selfEmploymentProfit(streams);
+  const taxableSelfProfit = streams.reduce((sum, stream) => {
+    if (stream.isSubjectToTax === false) return sum;
+    const expenses = stream.expenses.reduce((expenseSum, expense) => expenseSum + clampNumber(expense.amount), 0);
+    return sum + Math.max(0, clampNumber(stream.gross) - expenses);
+  }, 0);
   const niLiableSelfProfit = streams.reduce((sum, stream) => {
     if (!stream.isNiLiable) return sum;
     const expenses = stream.expenses.reduce((expenseSum, expense) => expenseSum + clampNumber(expense.amount), 0);
@@ -359,7 +365,7 @@ export function calculateTaxSummary(incomes: PayeIncome[], streams: SelfEmployme
     .reduce((sum, s) => sum + (clampNumber(s.balance) * (clampNumber(s.annualRate) / 100)), 0);
 
   const grossReliefAtSourcePension = grossSippFromNet(settings.sippNetContribution);
-  const combinedTaxable = payeTaxable + selfProfit;
+  const combinedTaxable = payeTaxable + taxableSelfProfit;
   const combinedTax = calculateIncomeTax(
     combinedTaxable,
     settings.taxCode,
@@ -382,7 +388,7 @@ export function calculateTaxSummary(incomes: PayeIncome[], streams: SelfEmployme
   let studentLoanTotal = 0;
   if (settings.includeStudentLoan) {
     const threshold = 27295; // Plan 2 threshold for 2024/25
-    const totalIncomeForStudentLoan = payeGross + selfProfit;
+    const totalIncomeForStudentLoan = payeGross + taxableSelfProfit;
     studentLoanTotal = Math.max(0, (totalIncomeForStudentLoan - threshold) * 0.09);
   }
 
@@ -830,6 +836,20 @@ export function getTargetPotAtAgeDetails(
       totalTargetPot,
       statePensionBridgeRequired: pvStatePensionBridge,
       postStatePensionPot: targetPotPostState
+    };
+  } else if (includeStatePension && statePensionAge <= drawdownAge) {
+    const solvedPostState = solveGrossPensionWithdrawal(
+      Math.max(0, annualExpenses - passiveIncome - statePensionAmount),
+      passiveIncome + statePensionAmount,
+      0.75,
+      taxCode,
+      region
+    );
+    const totalTargetPot = solvedPostState.grossPension / (swr / 100);
+    return {
+      totalTargetPot,
+      statePensionBridgeRequired: 0,
+      postStatePensionPot: totalTargetPot
     };
   } else {
     const totalTargetPot = solvedPreState.grossPension / (swr / 100);
