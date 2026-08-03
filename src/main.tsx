@@ -5749,7 +5749,10 @@ function DepletionChart({
   saveSurplusDrawdown: boolean; 
   setSaveSurplusDrawdown: (s: boolean) => void 
 }) { 
-  const colors = ['#2c7363', '#805ad5', '#d53f8c', '#4a5568']; 
+  const hasLisa = simulation.startingLisaPot > 0;
+  const colors = hasLisa
+    ? ['#2c7363', '#805ad5', '#d53f8c', '#4a5568']
+    : ['#2c7363', '#d53f8c', '#4a5568']; 
   const startAge = simulation.rows[0]?.age || 0;
   const years = simulation.rows
     .filter((row, idx) => idx === 0 || row.age === simulation.firstShortfallAge || row.age === simulation.finalAge || (row.age - startAge) % 5 === 0)
@@ -5758,16 +5761,23 @@ function DepletionChart({
   const data = useMemo(() => {
     return simulation.rows
       .filter((row) => years.includes(row.age - startAge))
-      .map(row => ({
-        year: row.age - startAge,
-        age: row.age,
-        buckets: [
+      .map(row => {
+        const buckets = [
           { label: 'ISA + Cash', value: Math.max(0, row.accessiblePot) },
-          { label: 'LISA', value: Math.max(0, row.lisaPot) },
+        ];
+        if (hasLisa) {
+          buckets.push({ label: 'LISA', value: Math.max(0, row.lisaPot) });
+        }
+        buckets.push(
           { label: 'Pension', value: Math.max(0, row.pensionPot) },
           { label: 'Total Pot', value: Math.max(0, row.totalPot) },
-        ],
-      }));
+        );
+        return {
+          year: row.age - startAge,
+          age: row.age,
+          buckets,
+        };
+      });
   }, [simulation, startAge, years.join(',')]);
 
   if (!data || data.length === 0 || !data[0]?.buckets) return null; 
