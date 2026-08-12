@@ -84,6 +84,12 @@ export const monthlyMoney = new Intl.NumberFormat("en-GB", {
   maximumFractionDigits: 2,
 });
 
+/** Format a number to at most `maxDp` decimal places, stripping trailing zeros.
+ *  e.g. fmt(40.3333) → "40.33", fmt(50) → "50", fmt(5.1) → "5.1" */
+export function fmt(n: number, maxDp = 2): string {
+  return parseFloat(n.toFixed(maxDp)).toString();
+}
+
 const roundPounds = (value: number) => Math.round(value);
 
 export function clampNumber(value: number, min = 0) {

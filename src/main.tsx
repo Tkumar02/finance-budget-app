@@ -44,6 +44,7 @@ import {
   clampNumber,
   money,
   monthlyMoney,
+  fmt,
   projectSavings,
   requiredGrossForNet,
   calculateNhsEmployeeRate,
@@ -544,13 +545,36 @@ function App() {
     setSavings(newSavings);
 
     if (pendingMortgageUpdate) {
-      setMortgages(mortgages.map(m => ({
-        ...m,
-        amount: pendingMortgageUpdate.newBalance,
-        years: Math.max(0, m.years - (pendingMortgageUpdate.months / 12)),
-        oneOffMonth: Math.max(0, m.oneOffMonth - pendingMortgageUpdate.months),
-        lastUpdated: today
-      })));
+      let keepTerm = false;
+      const m0 = mortgages[0];
+      if (m0 && (m0.monthlyOverpayment > 0 || m0.oneOffAmount > 0)) {
+        keepTerm = !window.confirm("You have made mortgage overpayments. Would you like to keep your monthly payments the same and shorten your mortgage term? \n\nClick OK to shorten term (keep payments same).\nClick Cancel to keep term the same (lower monthly payments).");
+      }
+
+      setMortgages(mortgages.map(m => {
+        const mUpdate = calculateMortgageUpdate(m, new Date(today));
+        if (mUpdate.monthsElapsed > 0 && 'newBalance' in mUpdate) {
+          let newYears = Math.max(0, m.years - (mUpdate.monthsElapsed / 12));
+
+          if (!keepTerm && (m.monthlyOverpayment > 0 || m.oneOffAmount > 0)) {
+            const oldStandardPayment = calculateMortgage(m).standardPayment;
+            const monthlyRate = m.annualRate / 100 / 12;
+            if (monthlyRate > 0 && oldStandardPayment > mUpdate.newBalance * monthlyRate) {
+                const n = -Math.log(1 - (mUpdate.newBalance * monthlyRate) / oldStandardPayment) / Math.log(1 + monthlyRate);
+                newYears = n / 12;
+            }
+          }
+
+          return {
+            ...m,
+            amount: mUpdate.newBalance,
+            years: newYears,
+            oneOffMonth: Math.max(0, m.oneOffMonth - mUpdate.monthsElapsed),
+            lastUpdated: today
+          };
+        }
+        return m;
+      }));
       setPendingMortgageUpdate(null);
     }
 
@@ -816,14 +840,21 @@ function App() {
               mortgages: data.mortgageBalance !== null ? (() => {
                 const userRate = data.mortgageRate || 4.5;
                 const monthlyRate = userRate / 100 / 12;
-                const numPayments = data.mortgageYears * 12;
-                const standardPayment = numPayments > 0 ? (data.mortgageBalance * monthlyRate) / (1 - Math.pow(1 + monthlyRate, -numPayments)) : 0;
-                const overpayment = data.mortgageMonthlyPayment > standardPayment ? data.mortgageMonthlyPayment - standardPayment : 0;
+                
+                let termYears = data.mortgageYears;
+                const userEnteredPayment = data.mortgageMonthlyPayment || 0;
+                const minInterest = data.mortgageBalance * monthlyRate;
+                
+                if (userEnteredPayment > minInterest && monthlyRate > 0) {
+                  const n = -Math.log(1 - minInterest / userEnteredPayment) / Math.log(1 + monthlyRate);
+                  termYears = n / 12;
+                }
+                
                 return [{
                   amount: data.mortgageBalance,
                   annualRate: userRate,
-                  years: data.mortgageYears,
-                  monthlyOverpayment: overpayment,
+                  years: termYears,
+                  monthlyOverpayment: 0,
                   oneOffMonth: 0,
                   oneOffAmount: 0,
                   paymentDay: 1,
@@ -1530,11 +1561,11 @@ const coastFireResult = useMemo(() => calculateCoastFire(
       id: "mortgage" as SectionId, 
       title: `Mortgage ${i + 1}`, 
       value: money.format(m.amount), 
-      subValue: `${mortgageSummaries[i].payoffYears.toFixed(1)} yrs payoff`,
+      subValue: `${fmt(mortgageSummaries[i].payoffYears)} yrs payoff`,
       detail: "current balance",
       color: "linear-gradient(135deg, #fff5f5 0%, #f7d9d9 100%)" 
     })) : []),
-    { id: "retirement" as SectionId, title: "Retirement", value: monthlyMoney.format(retirementSummary.monthlyIn), detail: `${projectionYears.toFixed(2)} year projection`, color: "linear-gradient(135deg, #f3e8ff 0%, #e8dded 100%)"},
+    { id: "retirement" as SectionId, title: "Retirement", value: monthlyMoney.format(retirementSummary.monthlyIn), detail: `${fmt(projectionYears)} year projection`, color: "linear-gradient(135deg, #f3e8ff 0%, #e8dded 100%)"},
     ...(showCoastFireCard ? [{ 
       id: "coastfire" as SectionId, 
       title: "Coast FIRE", 
@@ -2289,7 +2320,7 @@ function CoastFireSection({
                   <div style={{ margin: '15px 0' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', color: '#475569', marginBottom: '4px', fontWeight: 600 }}>
                       <span>Coast Progress (Today)</span>
-                      <span>{coastProgressPercent.toFixed(0)}%</span>
+                      <span>{fmt(coastProgressPercent, 0)}%</span>
                     </div>
                     <div style={{ width: '100%', height: '8px', background: 'rgba(0,0,0,0.06)', borderRadius: '4px', overflow: 'hidden' }}>
                       <div style={{ width: `${coastProgressPercent}%`, height: '100%', background: updatedResult.isCoastFire ? '#22c55e' : '#eab308', borderRadius: '4px', transition: 'width 0.5s ease-out' }}></div>
@@ -2301,8 +2332,8 @@ function CoastFireSection({
                       ? `Your current savings of ${money.format(currentTotalWealth)} are large enough to fund your retirement through growth alone. You could stop contributing today!`
                       : (updatedResult.coastFireAge === -1 
                         ? (fullFireResult.fullFireAge > 0
-                          ? `You won't reach Coast FIRE before retirement age ${retirementAge.toFixed(0)}, but at ${money.format(annualContribution)}/yr your projected Full FIRE age is ${Math.floor(fullFireResult.fullFireAge)}.`
-                          : `Even if you keep contributing ${money.format(annualContribution)}/yr, you won't reach Coast FIRE by retirement age ${retirementAge.toFixed(0)}.`)
+                          ? `You won't reach Coast FIRE before retirement age ${fmt(retirementAge, 0)}, but at ${money.format(annualContribution)}/yr your projected Full FIRE age is ${Math.floor(fullFireResult.fullFireAge)}.`
+                          : `Even if you keep contributing ${money.format(annualContribution)}/yr, you won't reach Coast FIRE by retirement age ${fmt(retirementAge, 0)}.`)
                         : `If you keep contributing ${money.format(annualContribution)}/yr, you will reach Coast FIRE at age ${Math.floor(updatedResult.coastFireAge)}. From that point, you don't need to save another penny for retirement.`)}
                   </p>
 
@@ -2320,7 +2351,7 @@ function CoastFireSection({
                       </span>
                       {updatedResult.isCoastFire ? (
                         <span style={{ color: '#166534', fontWeight: 600 }}>
-                          ✓ Reached today (Age {currentAge.toFixed(1)}), ahead of target age {targetCoastAge}.
+                          ✓ Reached today (Age {fmt(currentAge)}), ahead of target age {targetCoastAge}.
                         </span>
                       ) : updatedResult.coastFireAge === -1 ? (
                         <span style={{ color: '#991b1b', fontWeight: 600 }}>
@@ -2405,7 +2436,7 @@ function CoastFireSection({
                             </div>
                           </div>
                           <p style={{ margin: '10px 0 0', fontSize: '0.78rem', color: '#92400e', fontStyle: 'italic' }}>
-                            This is on top of your current {money.format(annualContribution / 12)}/month saving. These figures assume a {realGrowth}% real growth rate.
+                            This is on top of your current {money.format(annualContribution / 12)}/month saving. These figures assume a {fmt(realGrowth)}% real growth rate.
                           </p>
                         </>
                       )}
@@ -2463,7 +2494,7 @@ function CoastFireSection({
                   <div style={{ margin: '15px 0' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', color: '#475569', marginBottom: '4px', fontWeight: 600 }}>
                       <span>Full FIRE Progress (Today)</span>
-                      <span>{fullProgressPercent.toFixed(0)}%</span>
+                      <span>{fmt(fullProgressPercent, 0)}%</span>
                     </div>
                     <div style={{ width: '100%', height: '8px', background: 'rgba(0,0,0,0.06)', borderRadius: '4px', overflow: 'hidden' }}>
                       <div style={{ width: `${fullProgressPercent}%`, height: '100%', background: fullFireResult.isFullFire ? '#06b6d4' : '#6366f1', borderRadius: '4px', transition: 'width 0.5s ease-out' }}></div>
@@ -2697,14 +2728,14 @@ function CoastFireSection({
                       Early Retirement Bridge — Pension locked until age {pensionAccessAge}
                     </strong>
                     <p style={{ margin: '0 0 12px 0', fontSize: '0.85rem', color: '#475569', lineHeight: '1.5' }}>
-                      You want to retire at age {retirementAge.toFixed(0)}, but your pension pots cannot be accessed until age {pensionAccessAge}.
-                      Your ISA / Cash accounts must independently fund {retirementAge.toFixed(0)}→{pensionAccessAge} ({Math.round(pensionAccessAge - retirementAge)} years) before your pension unlocks.
+                      You want to retire at age {fmt(retirementAge, 0)}, but your pension pots cannot be accessed until age {pensionAccessAge}.
+                      Your ISA / Cash accounts must independently fund {fmt(retirementAge, 0)}→{pensionAccessAge} ({Math.round(pensionAccessAge - retirementAge)} years) before your pension unlocks.
                     </p>
 
                     {/* Three-column stat row */}
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 130px), 1fr))', gap: '10px', marginBottom: isBridgeFundedByCurrentPlan ? '0' : '14px' }}>
                       <div style={{ padding: '10px 12px', background: 'rgba(255,255,255,0.7)', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
-                        <div style={{ fontSize: '0.7rem', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', marginBottom: '4px' }}>Projected Accessible Pot at Age {retirementAge.toFixed(0)}</div>
+                        <div style={{ fontSize: '0.7rem', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', marginBottom: '4px' }}>Projected Accessible Pot at Age {fmt(retirementAge, 0)}</div>
                         <div style={{ fontSize: 'clamp(0.9rem, 3vw, 1.05rem)', fontWeight: 700, whiteSpace: 'nowrap', color: projectedAccessibleAtRetirement >= updatedResult.bridgeRequired ? '#0369a1' : '#b91c1c' }}>
                           {money.format(projectedAccessibleAtRetirement)}
                         </div>
@@ -2731,7 +2762,7 @@ function CoastFireSection({
                       <div style={{ padding: '10px 14px', background: '#fff7ed', borderRadius: '8px', border: '1px solid #fed7aa', display: 'flex', alignItems: 'center', gap: '10px' }}>
                         <span style={{ fontSize: '1.1rem' }}>💡</span>
                         <div>
-                          <div style={{ fontSize: '0.82rem', fontWeight: 700, color: '#92400e' }}>To close the bridge gap by age {retirementAge.toFixed(0)}:</div>
+                          <div style={{ fontSize: '0.82rem', fontWeight: 700, color: '#92400e' }}>To close the bridge gap by age {fmt(retirementAge, 0)}:</div>
                           <div style={{ fontSize: '0.8rem', color: '#78350f', marginTop: '2px' }}>
                             Redirect an extra <strong>{money.format(extraMonthlyForBridge)}/month</strong> into accessible accounts (ISA / Cash) on top of your current contributions.
                           </div>
@@ -2757,7 +2788,7 @@ function CoastFireSection({
                 <br/><br/>
                 1. <strong>The Bridge Phase (Retirement Age to {pensionAccessAge}):</strong> Since pensions cannot be touched, you must live off accessible accounts (ISAs and Cash). We calculate the present value of this bridge, allowing your leftover accessible money to grow during this period.
                 <br/>
-                2. <strong>The Long-Term Phase ({pensionAccessAge} onwards):</strong> Once your pensions unlock, your combined total pots (Pensions + remaining Accessible pots) must be large enough to support you forever under a {swr}% safe withdrawal rate.
+                2. <strong>The Long-Term Phase ({pensionAccessAge} onwards):</strong> Once your pensions unlock, your combined total pots (Pensions + remaining Accessible pots) must be large enough to support you forever under a {fmt(swr)}% safe withdrawal rate.
                 <br/><br/>
                 <strong>Your Coasting Income:</strong> Once you reach Coast FIRE (Age {updatedResult.coastFireAge === -1 ? "N/A" : Math.floor(updatedResult.coastFireAge)}), you no longer need to save for retirement. You only need to earn enough from work to cover your remaining net living expenses: <strong>{money.format(netExpenses/12)}/month net</strong> (equivalent to <strong>{money.format(grossSalaryRequired)}/year gross</strong>) in addition to your passive income of <strong>{money.format(passiveIncome)}/year</strong>.
               </p>
@@ -2792,7 +2823,7 @@ function CoastFireSection({
                     Probability of Success
                   </span>
                   <h4 style={{ fontSize: '3rem', margin: '10px 0', color: monteCarloResult.successRate >= 90 ? '#166534' : (monteCarloResult.successRate >= 80 ? '#92400e' : '#9b1c1c'), fontWeight: 800 }}>
-                    {monteCarloResult.successRate.toFixed(1)}%
+                    {fmt(monteCarloResult.successRate)}%
                   </h4>
                   <p style={{ fontSize: '0.8rem', color: '#475569', margin: 0, fontWeight: 500 }}>
                     {monteCarloResult.successRate >= 90 
@@ -2806,9 +2837,9 @@ function CoastFireSection({
                 <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
                   <h4 style={{ margin: '0 0 10px 0', fontSize: '1rem', color: '#334155' }}>What does this success rate mean?</h4>
                   <p style={{ fontSize: '0.825rem', color: '#64748b', lineHeight: '1.5', margin: 0 }}>
-                    Instead of assuming a static growth rate (e.g. constant {realGrowth}%), we simulate <strong>1,000 distinct retirements</strong> where the market return fluctuates randomly each year (averaging {realGrowth}% with a standard deviation of {volatility}% volatility).
+                    Instead of assuming a static growth rate (e.g. constant {fmt(realGrowth)}%), we simulate <strong>1,000 distinct retirements</strong> where the market return fluctuates randomly each year (averaging {fmt(realGrowth)}% with a standard deviation of {fmt(volatility)}% volatility).
                     <br/><br/>
-                    A success rate of <strong>{monteCarloResult.successRate.toFixed(1)}%</strong> means that in <strong>{(monteCarloResult.successRate * 10).toFixed(0)} out of 1,000</strong> simulated trials, your pension and accessible savings survived until age {tableEndAge} without hitting zero.
+                    A success rate of <strong>{fmt(monteCarloResult.successRate)}%</strong> means that in <strong>{fmt(monteCarloResult.successRate * 10, 0)} out of 1,000</strong> simulated trials, your pension and accessible savings survived until age {tableEndAge} without hitting zero.
                   </p>
                 </div>
               </div>
@@ -2934,7 +2965,7 @@ function CoastFireSection({
                   <div style={{ display: 'flex', justifyContent: 'space-between', margin: '6px 0', fontSize: '0.9rem' }}>
                     <span style={{ color: '#475569' }}>Phase years:</span>
 <strong style={{ color: '#1e293b' }}>
-  {Math.max(0, excelCoastAge - currentAge).toFixed(2)} building / {Math.max(0, excelRetirementAge - excelCoastAge).toFixed(2)} coasting
+  {fmt(Math.max(0, excelCoastAge - currentAge))} building / {fmt(Math.max(0, excelRetirementAge - excelCoastAge))} coasting
 </strong>                  </div>
                 </div>
               </div>
@@ -3064,7 +3095,7 @@ function CoastFireSection({
                 </table>
               </div>
               <p style={{ fontSize: '0.75rem', color: '#64748b', marginTop: '8px', textAlign: 'center' }}>
-                📌 Pension growth rate ({excelPpGrowth}%) is separate from ISA growth rate ({excelIsaGrowth}%). Pension withdrawals include a tax factor of {excelPpTaxFactor} (basic rate estimation). State pension starts at age 68 (age &gt; 67).
+                📌 Pension growth rate ({fmt(excelPpGrowth)}%) is separate from ISA growth rate ({fmt(excelIsaGrowth)}%). Pension withdrawals include a tax factor of {fmt(excelPpTaxFactor)} (basic rate estimation). State pension starts at age 68 (age &gt; 67).
               </p>
             </div>
           </>
@@ -4109,7 +4140,7 @@ function RetirementSection({
         <div style={{ display: 'none' }}>
         <ResultRows rows={[
           ["Costs in today's money (monthly)", -summary.currentMonthlyExpenses],
-          [`Costs at retirement (inflated ${projectionYears.toFixed(1)} yrs)`, -(firstRetirementRow?.expenses || 0) / 12],
+          [`Costs at retirement (inflated ${fmt(projectionYears)} yrs)`, -(firstRetirementRow?.expenses || 0) / 12],
           ["Avg. net income across retirement", retirementSimulation.rows.length > 0 ? retirementSimulation.rows.reduce((sum, r) => sum + r.netIncome, 0) / retirementSimulation.rows.length / 12 : 0],
           ["Final pot remaining", retirementSimulation.finalPot],
         ]} />
@@ -4121,7 +4152,7 @@ function RetirementSection({
               ? `✓ Pot covers full retirement to age ${retirementSimulation.finalAge}`
               : `⚠ First shortfall projected at age ${retirementSimulation.firstShortfallAge}`}
           </span>
-          <p style={{ color: '#666', marginTop: '6px' }}>Simulated age {Math.ceil(retirementAge)} → {retirementSimulation.finalAge}, using {inflationRate}% inflation, pension-access timing, and selected retirement costs.</p>
+          <p style={{ color: '#666', marginTop: '6px' }}>Simulated age {Math.ceil(retirementAge)} → {retirementSimulation.finalAge}, using {fmt(inflationRate)}% inflation, pension-access timing, and selected retirement costs.</p>
         </div>
         {hasActiveLisa && retirementAge < 60 && showLisaUnder60 && (
           <p style={{color: '#a7332f', fontSize: '0.85rem', marginTop: '10px', fontWeight: 600}}>
@@ -5643,7 +5674,7 @@ function SavingsSection({
                     <small style={{ color: "#a7332f", fontSize: "0.65rem", fontWeight: 800 }}>WITHDRAWN (EMPTY)</small>
                   )}
                   {bucket.projected > 0 && bucket.isWithdrawn && (
-                    <small style={{ color: "#a26013", fontSize: "0.65rem", fontWeight: 800 }}>WITHDRAWING ({drawdownSettings[bucket.id]?.rate || 4}% rate)</small>
+                    <small style={{ color: "#a26013", fontSize: "0.65rem", fontWeight: 800 }}>WITHDRAWING ({fmt(drawdownSettings[bucket.id]?.rate || 4)}% rate)</small>
                   )}
                 </div>
                 <div className="bar-track" style={{ flex: 1, margin: "0 20px", borderStyle: bucket.isWithdrawn ? "dashed" : "solid", opacity: bucket.isWithdrawn ? 0.7 : 1 }}>
@@ -5654,7 +5685,7 @@ function SavingsSection({
           })}
         </div>
         <div style={{ borderTop: "1px solid #eee", marginTop: "20px", paddingTop: "15px" }}>
-          <Metric label={`Projected total in ${projectionYears.toFixed(2)} years`} value={money.format(projectedTotal)} tone="green" />
+          <Metric label={`Projected total in ${fmt(projectionYears)} years`} value={money.format(projectedTotal)} tone="green" />
         </div>
       </section>
     </div>
@@ -5712,7 +5743,7 @@ function MortgageSection({ mortgages, setMortgages, mortgageSummaries }: { mortg
           {mortgageSummaries[i] && (
             <section className="summary-grid tight">
               <Metric label="Standard payment" value={monthlyMoney.format(mortgageSummaries[i].standardPayment)} />
-              <Metric label="Payoff time" value={`${mortgageSummaries[i].payoffYears.toFixed(1)} years`} />
+              <Metric label="Payoff time" value={`${fmt(mortgageSummaries[i].payoffYears)} years`} />
               <Metric label="Interest paid" value={money.format(mortgageSummaries[i].totalInterest)} tone="amber" />
               <Metric label="Interest saved" value={money.format(mortgageSummaries[i].interestSaved)} tone="green" />
             </section>
@@ -5970,7 +6001,7 @@ function LineChart({ data, years, colors }: any) {
           }}
         >
           <div><strong>Year:</strong> {hoveredData.year} (+{hoveredData.year}y)</div>
-          <div><strong>Age:</strong> {hoveredData.age.toFixed(1)}</div>
+          <div><strong>Age:</strong> {fmt(hoveredData.age)}</div>
           {hoveredData.buckets.map((b: any) => (
             <div key={b.label}><strong>{b.label}:</strong> {money.format(b.value)}</div>
           ))}
